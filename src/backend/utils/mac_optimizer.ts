@@ -703,6 +703,25 @@ export function autoTuneGameEngineSettings(
       logError(['[MacOptimizer] Error tuning Engine.ini:', err], LogPrefix.Backend)
     }
   }
+
+  // 3. Search for Unreal Engine ConsoleVariables.ini files in AppData/Local (deep search depth 12)
+  const cvarFiles = findFilesInDir(baseUsersDir, 'ConsoleVariables.ini', 12)
+  const cvarBlock = `[Startup]\nr.VolumetricFog=0\nr.Lumen.Reflections.Allow=0\nr.Lumen.GlobalIllumination.Quality=1\nr.Lumen.ScreenProbeGather.DownsampleFactor=16\nr.LumenScene.Radiosity=0\nr.Shadow.Virtual.ResolutionLodBiasDirectional=2\nr.Shadow.Virtual.ResolutionLodBiasLocal=2\nfoliage.DensityScale=0.65\nr.Tonemapper.Sharpen=0.6\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
+  for (const cvarPath of cvarFiles) {
+    try {
+      let content = existsSync(cvarPath) ? readFileSync(cvarPath, 'utf-8') : ''
+      if (!content.includes('[Startup]')) {
+        content = cvarBlock + content
+        writeFileSync(cvarPath, content, 'utf-8')
+        logInfo(
+          `[MacOptimizer] Injected High-Framerate ConsoleVariables into ${cvarPath}`,
+          LogPrefix.Backend
+        )
+      }
+    } catch (err) {
+      logError(['[MacOptimizer] Error tuning ConsoleVariables.ini:', err], LogPrefix.Backend)
+    }
+  }
 }
 
 /**
@@ -725,11 +744,11 @@ export function autoTuneSaveGameSettings(
 
   if (!baseUsersDir) return
 
-  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned (e.g. 2048x576)
-  // to prevent the 7.37-million-pixel native fill-rate bottleneck from capping UE5 Lumen to 17 FPS.
+  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned to 1792x504
+  // to achieve high framerates (100+ FPS) without hitting UE5 Nanite/Lumen fill-rate caps.
   const isSuperUltrawide = profile.targetResolution.width >= 3840
-  const targetW = isSuperUltrawide ? Math.round(profile.targetResolution.width * 0.4) : profile.targetResolution.width
-  const targetH = isSuperUltrawide ? Math.round(profile.targetResolution.height * 0.4) : profile.targetResolution.height
+  const targetW = isSuperUltrawide ? 1792 : profile.targetResolution.width
+  const targetH = isSuperUltrawide ? 504 : profile.targetResolution.height
 
   // 1. Tune SystemSettings.Windows.sav (Resolution & FirstLaunch flag)
   const systemSavFiles = findFilesInDir(baseUsersDir, 'SystemSettings.Windows.sav', 12)
