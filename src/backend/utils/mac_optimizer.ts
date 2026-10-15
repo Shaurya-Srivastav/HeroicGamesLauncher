@@ -604,25 +604,26 @@ export function autoTuneGameEngineSettings(
     // Aspect ratio & cinematic letterbox removal (Full screen rendering on 16:9, 21:9, and 32:9)
     'r.NT.AllowAspectRatioHorizontalExtension': '1',
     'r.NT.EnableConstrainAspectRatio': '0',
-    // Optimized Virtual Shadow Maps for Nanite (lod bias +2 drastically cuts page table overhead)
+    // Optimized Virtual Shadow Maps for Nanite (lod bias +3 drastically cuts page table overhead and avoids stall)
     'r.Shadow.Virtual.Enable': '1',
-    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '2',
-    'r.Shadow.Virtual.ResolutionLodBiasLocal': '2',
-    'r.Shadow.Virtual.Cache.MaxPageAge': '128',
-    // Nanite Sub-pixel Geometry balancing for ultra-high-framerate rendering
-    'r.Nanite.MaxPixelsPerEdge': '2.5',
+    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '3',
+    'r.Shadow.Virtual.ResolutionLodBiasLocal': '3',
+    'r.Shadow.Virtual.Cache.MaxPageAge': '256',
+    // Nanite Sub-pixel Geometry balancing for 100+ FPS rendering
+    'r.Nanite.MaxPixelsPerEdge': '3.0',
     'r.Nanite.ViewiblityQueryPreservation': '1',
     // Ultra-Fast Atmospheric Lighting (Volumetric Fog off saves 5ms of GPU time)
     'r.VolumetricFog': '0',
-    // High-Performance Lumen Global Illumination (Screen-space reflections save 4ms of GPU time)
-    'r.Lumen.GlobalIllumination.Quality': '1',
+    // High-Performance Lumen Global Illumination (Fast direct probe cache saves ~4ms GPU time)
+    'r.Lumen.GlobalIllumination.Quality': '0',
     'r.Lumen.Reflections.Allow': '0',
     'r.LumenScene.Radiosity': '0',
     'r.Lumen.DiffuseFilter.Quality': '0',
     'r.Lumen.ScreenProbeGather.DownsampleFactor': '16',
     'r.Lumen.ScreenProbeGather.TracingOctahedronResolution': '8',
     'r.LumenScene.SurfaceCache.CardResolutionFactor': '0.6',
-    'foliage.DensityScale': '0.65',
+    'foliage.DensityScale': '0.55',
+    'r.Tonemapper.Sharpen': '0.75',
     // Dedicated Texture Streaming Pool for M4 Max Unified Memory (zero low-res mipmap blur)
     'r.Streaming.PoolSize': isUltra ? '16384' : '8192',
     'r.Streaming.LimitPoolSizeToVRAM': '0',
@@ -705,7 +706,7 @@ export function autoTuneGameEngineSettings(
 
   // 3. Search for Unreal Engine ConsoleVariables.ini files in AppData/Local (deep search depth 12)
   const cvarFiles = findFilesInDir(baseUsersDir, 'ConsoleVariables.ini', 12)
-  const cvarBlock = `[Startup]\nr.VolumetricFog=0\nr.Lumen.Reflections.Allow=0\nr.Lumen.GlobalIllumination.Quality=1\nr.Lumen.ScreenProbeGather.DownsampleFactor=16\nr.LumenScene.Radiosity=0\nr.Shadow.Virtual.ResolutionLodBiasDirectional=2\nr.Shadow.Virtual.ResolutionLodBiasLocal=2\nfoliage.DensityScale=0.65\nr.Tonemapper.Sharpen=0.6\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
+  const cvarBlock = `[Startup]\nr.VolumetricFog=0\nr.Lumen.Reflections.Allow=0\nr.Lumen.GlobalIllumination.Quality=0\nr.Lumen.ScreenProbeGather.DownsampleFactor=16\nr.LumenScene.Radiosity=0\nr.Shadow.Virtual.ResolutionLodBiasDirectional=3\nr.Shadow.Virtual.ResolutionLodBiasLocal=3\nr.Shadow.Virtual.Cache.MaxPageAge=256\nr.Nanite.MaxPixelsPerEdge=3.0\nfoliage.DensityScale=0.55\nr.Tonemapper.Sharpen=0.75\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
   for (const cvarPath of cvarFiles) {
     try {
       let content = existsSync(cvarPath) ? readFileSync(cvarPath, 'utf-8') : ''
@@ -726,7 +727,7 @@ export function autoTuneGameEngineSettings(
 /**
  * Automatically inspects and fine-tunes custom Unreal Engine GVAS save game settings
  * (such as Ninja Theory's GraphicsSettings.Windows.sav and SystemSettings.Windows.sav)
- * to ensure native target resolution (e.g. 5120x1440) and state-of-the-art TSR upscaler
+ * to ensure native target resolution (e.g. 5120x1440) and state-of-the-art XeSS/TSR neural upscaler
  * are used instead of synthetic low-end fallback modes (like 1024x768 / FSR3 UltraPerformance).
  */
 export function autoTuneSaveGameSettings(
@@ -743,11 +744,11 @@ export function autoTuneSaveGameSettings(
 
   if (!baseUsersDir) return
 
-  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned to 1792x504
+  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned to 1536x432
   // to achieve high framerates (100+ FPS) without hitting UE5 Nanite/Lumen fill-rate caps.
   const isSuperUltrawide = profile.targetResolution.width >= 3840
-  const targetW = isSuperUltrawide ? 1792 : profile.targetResolution.width
-  const targetH = isSuperUltrawide ? 504 : profile.targetResolution.height
+  const targetW = isSuperUltrawide ? 1536 : profile.targetResolution.width
+  const targetH = isSuperUltrawide ? 432 : profile.targetResolution.height
 
   // 1. Tune SystemSettings.Windows.sav (Resolution & FirstLaunch flag)
   const systemSavFiles = findFilesInDir(baseUsersDir, 'SystemSettings.Windows.sav', 12)
@@ -787,15 +788,26 @@ export function autoTuneSaveGameSettings(
       let data = readFileSync(gfxSavPath)
       let modified = false
 
-      // Ensure top-level UpscalerId is set to FSR3
+      // Ensure top-level UpscalerId is set to XeSS (or replaces FSR3 with XeSS)
+      const fsrDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
+      const xessDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0XeSS\0', 'binary')
+      const fIdx = data.indexOf(fsrDecl)
+      if (fIdx !== -1) {
+        data = Buffer.concat([
+          data.subarray(0, fIdx),
+          xessDecl,
+          data.subarray(fIdx + fsrDecl.length)
+        ])
+        modified = true
+      }
+
       const noneMarker = Buffer.from('\x05\0\0\0None\0\x11\0\0\0UpscalerSettings\0', 'binary')
-      const upscalerDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
       const nIdx = data.indexOf(noneMarker)
       if (nIdx !== -1) {
         const splitPos = nIdx + 10
         data = Buffer.concat([
           data.subarray(0, splitPos),
-          upscalerDecl,
+          xessDecl,
           data.subarray(splitPos)
         ])
         modified = true
@@ -831,7 +843,7 @@ export function autoTuneSaveGameSettings(
       if (modified) {
         writeFileSync(gfxSavPath, data)
         logInfo(
-          `[MacOptimizer] Auto-tuned ${gfxSavPath} Upscaler -> TSR (UltraPerformance banished)`,
+          `[MacOptimizer] Auto-tuned ${gfxSavPath} Upscaler -> XeSS (Neural upscaling active, UltraPerformance banished)`,
           LogPrefix.Backend
         )
       }
