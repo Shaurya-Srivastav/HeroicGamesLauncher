@@ -349,17 +349,18 @@ export function autoTuneGameEngineSettings(
 
   if (!baseUsersDir) return
 
-  // Search for Unreal Engine GameUserSettings.ini files in AppData/Local
-  const iniFiles = findFilesInDir(baseUsersDir, 'GameUserSettings.ini', 5)
+  const targetW = profile.targetResolution.width
+  const targetH = profile.targetResolution.height
+  const refreshRate = profile.displayRefreshRate
+  const qualityLevel = profile.performanceTier === 'ultra' ? 3 : profile.performanceTier === 'high' ? 2 : 1
 
-  for (const iniPath of iniFiles) {
+  // 1. Search for Unreal Engine GameUserSettings.ini files in AppData/Local (deep search depth 12)
+  const userSettingsFiles = findFilesInDir(baseUsersDir, 'GameUserSettings.ini', 12)
+
+  for (const iniPath of userSettingsFiles) {
     try {
       let content = readFileSync(iniPath, 'utf-8')
       let modified = false
-
-      const targetW = profile.targetResolution.width
-      const targetH = profile.targetResolution.height
-      const refreshRate = profile.displayRefreshRate
 
       // Resolution
       if (/^ResolutionSizeX=/m.test(content)) {
@@ -370,6 +371,26 @@ export function autoTuneGameEngineSettings(
       if (/^LastUserConfirmedResolutionSizeX=/m.test(content)) {
         content = content.replace(/^LastUserConfirmedResolutionSizeX=.*/m, `LastUserConfirmedResolutionSizeX=${targetW}`)
         content = content.replace(/^LastUserConfirmedResolutionSizeY=.*/m, `LastUserConfirmedResolutionSizeY=${targetH}`)
+        modified = true
+      }
+      if (/^DesiredScreenWidth=/m.test(content)) {
+        content = content.replace(/^DesiredScreenWidth=.*/m, `DesiredScreenWidth=${targetW}`)
+        content = content.replace(/^DesiredScreenHeight=.*/m, `DesiredScreenHeight=${targetH}`)
+        modified = true
+      }
+      if (/^LastUserConfirmedDesiredScreenWidth=/m.test(content)) {
+        content = content.replace(/^LastUserConfirmedDesiredScreenWidth=.*/m, `LastUserConfirmedDesiredScreenWidth=${targetW}`)
+        content = content.replace(/^LastUserConfirmedDesiredScreenHeight=.*/m, `LastUserConfirmedDesiredScreenHeight=${targetH}`)
+        modified = true
+      }
+
+      // Dynamic Resolution & Resolution Quality sanity check
+      if (/^sg\.ResolutionQuality=0(?:\.0+)?/m.test(content)) {
+        content = content.replace(/^sg\.ResolutionQuality=.*/m, 'sg.ResolutionQuality=100.000000')
+        modified = true
+      }
+      if (/^bUseDynamicResolution=/m.test(content)) {
+        content = content.replace(/^bUseDynamicResolution=.*/m, 'bUseDynamicResolution=True')
         modified = true
       }
 
@@ -402,11 +423,12 @@ export function autoTuneGameEngineSettings(
       }
 
       // Tier-based scalability groups
-      const qualityLevel = profile.performanceTier === 'ultra' ? 3 : profile.performanceTier === 'high' ? 2 : 1
       const scalabilityKeys = [
         'sg.ViewDistanceQuality',
         'sg.AntiAliasingQuality',
         'sg.ShadowQuality',
+        'sg.GlobalIlluminationQuality',
+        'sg.ReflectionQuality',
         'sg.PostProcessQuality',
         'sg.TextureQuality',
         'sg.EffectsQuality',
@@ -431,6 +453,74 @@ export function autoTuneGameEngineSettings(
       }
     } catch (err) {
       logError(['[MacOptimizer] Error tuning GameUserSettings.ini:', err], LogPrefix.Backend)
+    }
+  }
+
+  // 2. Search for Unreal Engine Engine.ini files in AppData/Local (deep search depth 12)
+  const engineIniFiles = findFilesInDir(baseUsersDir, 'Engine.ini', 12)
+
+  const frontierSettings: Record<string, string> = {
+    // Virtual Shadow Maps optimization (Massive speed boost on Apple Silicon)
+    'r.Shadow.Virtual.Enable': '0',
+    'r.Shadow.CSM.MaxCascades': '2',
+    // Nanite geometry cluster tuning
+    'r.Nanite.MaxPixelsPerEdge': '2.0',
+    'r.Nanite.ViewiblityQueryPreservation': '0',
+    // Lumen global illumination optimization
+    'r.Lumen.GlobalIllumination.Quality': '1',
+    'r.Lumen.Reflections.Allow': '1',
+    'r.Lumen.DiffuseFilter.Quality': '1',
+    'r.LumenScene.Radiosity': '0',
+    // Aspect ratio & cinematic letterbox removal (Full screen rendering)
+    'r.NT.AllowAspectRatioHorizontalExtension': '0',
+    'r.NT.EnableConstrainAspectRatio': '0',
+    // Eliminate expensive post-process filter stalls
+    'r.FilmGrain': '0',
+    'r.MotionBlurQuality': '0',
+    'r.SceneColorFringeMethod': '0',
+    'r.NT.Lens.ChromaticAberration.Intensity': '0',
+    // Multi-threaded render pipeline execution
+    'r.FinishCurrentFrame': '0',
+    'r.SeparateTranslucency': '0'
+  }
+
+  for (const engineIniPath of engineIniFiles) {
+    try {
+      let content = existsSync(engineIniPath) ? readFileSync(engineIniPath, 'utf-8') : ''
+      let modified = false
+
+      if (!content.includes('[SystemSettings]')) {
+        const block = Object.entries(frontierSettings)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('\n')
+        content += `\n[SystemSettings]\n${block}\n`
+        modified = true
+      } else {
+        // Update or inject any missing frontier settings under [SystemSettings]
+        for (const [key, val] of Object.entries(frontierSettings)) {
+          const regex = new RegExp(`^${key.replace('.', '\\.')}=.*`, 'm')
+          if (regex.test(content)) {
+            content = content.replace(regex, `${key}=${val}`)
+            modified = true
+          } else {
+            content = content.replace(
+              /\[SystemSettings\]([^\n]*\n)/,
+              `[SystemSettings]$1${key}=${val}\n`
+            )
+            modified = true
+          }
+        }
+      }
+
+      if (modified) {
+        writeFileSync(engineIniPath, content, 'utf-8')
+        logInfo(
+          `[MacOptimizer] Injected Frontier UE5/Nanite/Lumen optimizations into ${engineIniPath}`,
+          LogPrefix.Backend
+        )
+      }
+    } catch (err) {
+      logError(['[MacOptimizer] Error tuning Engine.ini:', err], LogPrefix.Backend)
     }
   }
 }
