@@ -1,5 +1,5 @@
 import { ExecResult, GameInfo } from 'common/types'
-import { readdirSync } from 'graceful-fs'
+import { existsSync, readFileSync, readdirSync } from 'graceful-fs'
 import { dirname, join } from 'path'
 import { libraryStore } from './electronStores'
 import { logWarning } from 'backend/logger'
@@ -49,15 +49,38 @@ export default class SideloadLibraryManager implements LibraryManager {
     }
 
     if (isMac && executable?.endsWith('.app')) {
-      const macAppExecutable = readdirSync(
-        join(executable, 'Contents', 'MacOS')
-      )[0]
-      game.install.executable = join(
-        executable,
-        'Contents',
-        'MacOS',
-        macAppExecutable
-      )
+      let trueBinary: string | undefined
+      const plistPath = join(executable, 'Contents', 'Info.plist')
+      if (existsSync(plistPath)) {
+        try {
+          const plistContent = readFileSync(plistPath, 'utf-8')
+          const match = plistContent.match(
+            /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/i
+          )
+          if (match && match[1]) {
+            trueBinary = match[1].trim()
+          }
+        } catch {}
+      }
+
+      if (!trueBinary) {
+        const macBinDir = join(executable, 'Contents', 'MacOS')
+        if (existsSync(macBinDir)) {
+          const macBinaries = readdirSync(macBinDir).filter(
+            (f) => !f.startsWith('.') && f !== 'crashpad_handler'
+          )
+          trueBinary = macBinaries[0]
+        }
+      }
+
+      if (trueBinary) {
+        game.install.executable = join(
+          executable,
+          'Contents',
+          'MacOS',
+          trueBinary
+        )
+      }
     }
 
     const current = libraryStore.get('games', [])

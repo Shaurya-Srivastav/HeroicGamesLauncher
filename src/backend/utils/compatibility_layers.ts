@@ -105,6 +105,9 @@ export function getWineLibs(wineBin: string): {
   const potLibPath = join(wineDir, '../lib64')
   if (existsSync(potLibPath)) {
     ret.lib = potLibPath
+  } else if (isMac && existsSync(potLib32Path)) {
+    // macOS Wine distributions store 64-bit and 32on64 libraries in ../lib
+    ret.lib = potLib32Path
   }
   return ret
 }
@@ -531,6 +534,54 @@ export async function getWhisky(): Promise<Set<WineInstallation>> {
   }
 
   return whisky
+}
+
+/**
+ * Detects Wine installed via Homebrew on Mac (/opt/homebrew or /usr/local)
+ *
+ * @returns Promise<Set<WineInstallation>>
+ */
+export async function getHomebrewWine(): Promise<Set<WineInstallation>> {
+  const brewWine = new Set<WineInstallation>()
+  if (!isMac) {
+    return brewWine
+  }
+
+  const brewBins = [
+    '/opt/homebrew/bin/wine64',
+    '/opt/homebrew/bin/wine',
+    '/usr/local/bin/wine64',
+    '/usr/local/bin/wine'
+  ]
+
+  for (const bin of brewBins) {
+    if (existsSync(bin)) {
+      try {
+        const { stdout } = await execAsync(`'${bin}' --version`)
+        const version = stdout.split('\n')[0].trim()
+        const wineDir = dirname(bin)
+        const libPath = existsSync(join(wineDir, '../lib'))
+          ? join(wineDir, '../lib')
+          : ''
+
+        brewWine.add({
+          bin,
+          name: `Homebrew Wine - ${version}`,
+          type: 'wine',
+          lib: libPath,
+          lib32: libPath,
+          ...getWineExecs(bin)
+        })
+      } catch (error) {
+        logError(
+          [`Error getting version for Homebrew wine ${bin}:`, error],
+          LogPrefix.GlobalConfig
+        )
+      }
+    }
+  }
+
+  return brewWine
 }
 
 export type AllowedWineFlags = Pick<

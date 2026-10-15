@@ -232,6 +232,8 @@ export function getAntiDriverWarningOverrides(existingOverrides?: string): strin
     'atidxx64=d',
     'atiumd64=d',
     'atiumdag=d',
+    'nvapi64=d',
+    'nvapi=d',
     'winemenubuilder.exe=d'
   ]
 
@@ -287,7 +289,8 @@ dxgi.nvapiHack = False
 dxvk.enableAsync = True
 dxvk.numCompilerThreads = ${profile.performanceCores}
 d3d11.maxTessFactor = 16
-dxgi.syncInterval = 1
+dxgi.syncInterval = 0
+d3d11.relaxedBarriers = True
 `
   try {
     writeFileSync(confPath, confContent, 'utf-8')
@@ -623,6 +626,25 @@ export async function tuneWinePrefixForMac(
         modified = true
       }
 
+      // Auto-tune Unity engine titles in user.reg (Screenmanager resolution and fullscreen)
+      if (content.includes('Screenmanager Resolution Width')) {
+        const hexW = profile.targetResolution.width.toString(16).padStart(8, '0')
+        const hexH = profile.targetResolution.height.toString(16).padStart(8, '0')
+        content = content.replace(
+          /^"Screenmanager Resolution Width[^"]*"=dword:[0-9a-fA-F]+/gm,
+          (match) => match.replace(/dword:[0-9a-fA-F]+/, `dword:${hexW}`)
+        )
+        content = content.replace(
+          /^"Screenmanager Resolution Height[^"]*"=dword:[0-9a-fA-F]+/gm,
+          (match) => match.replace(/dword:[0-9a-fA-F]+/, `dword:${hexH}`)
+        )
+        content = content.replace(
+          /^"Screenmanager Fullscreen mode[^"]*"=dword:[0-9a-fA-F]+/gm,
+          (match) => match.replace(/dword:[0-9a-fA-F]+/, 'dword:00000001')
+        )
+        modified = true
+      }
+
       if (modified) {
         writeFileSync(userRegPath, content, 'utf-8')
         logInfo(
@@ -750,6 +772,12 @@ export function boostGameProcessPriority(pid: number | undefined): void {
   if (!isMac || !pid || pid <= 0) return
 
   const applyBoost = async (targetPid: number) => {
+    try {
+      // 1. Darwin taskpolicy: move target process out of background efficiency clamping
+      // and assign throughput tier 0 (maximum CPU throughput) and latency tier 0 (interactive)
+      await execPromise(`/usr/sbin/taskpolicy -B -t 0 -l 0 -p ${targetPid}`).catch(() => {})
+    } catch {}
+
     try {
       setPriority(targetPid, -10)
     } catch {

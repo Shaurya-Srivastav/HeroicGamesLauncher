@@ -816,7 +816,7 @@ function killPattern(pattern: string) {
 async function shutdownWine(gameSettings: GameSettings) {
   if (gameSettings.wineVersion.wineserver) {
     spawnSync(gameSettings.wineVersion.wineserver, ['-k'], {
-      env: { WINEPREFIX: gameSettings.winePrefix }
+      env: { ...process.env, WINEPREFIX: gameSettings.winePrefix }
     })
   } else {
     await runWineCommand({

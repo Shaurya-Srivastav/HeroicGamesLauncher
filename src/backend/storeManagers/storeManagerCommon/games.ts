@@ -23,7 +23,7 @@ import {
   deleteAbortController
 } from '../../utils/aborthandler/aborthandler'
 import { BrowserWindow, dialog, Menu } from 'electron'
-import { sendGameStatusUpdate } from 'backend/utils'
+import { execAsync, sendGameStatusUpdate } from 'backend/utils'
 import { isLinux, isMac } from 'backend/constants/environment'
 import { windowIcon } from 'backend/constants/paths'
 
@@ -220,6 +220,11 @@ export async function launchGame(
         // On Mac, it gives an error when changing the permissions of the file inside the app bundle. But we need it for other executables like scripts.
         if (isLinux || (isMac && !executable.endsWith('.app'))) {
           await chmod(executable, 0o775)
+        }
+        if (isMac) {
+          try {
+            await execAsync(`xattr -dr com.apple.quarantine "${executable}"`).catch(() => {})
+          } catch {}
         }
       }
 

@@ -962,6 +962,7 @@ async function prepareWineLaunch(
   }
 
   if (
+    isLinux &&
     gameSettings.eacRuntime &&
     isOnline() &&
     !(await isInstalled('eac_runtime'))
@@ -970,6 +971,7 @@ async function prepareWineLaunch(
   }
 
   if (
+    isLinux &&
     gameSettings.battlEyeRuntime &&
     isOnline() &&
     !(await isInstalled('battleye_runtime'))
@@ -1197,6 +1199,9 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
     (gameSettings.enableMsync || wineVersion.name.endsWith('-DXMT'))
   ) {
     ret.WINEMSYNC = '1'
+  }
+  if (isMac && ret.WINEMSYNC === '1') {
+    delete ret.WINEESYNC
   }
   if (isLinux && gameSettings.enableFsync && wineVersion.type !== 'proton') {
     ret.WINEFSYNC = '1'
@@ -1568,6 +1573,11 @@ async function runWineCommand({
     if (wrappers.length) {
       bin = wrappers.shift()!
       commandParts.unshift(...wrappers, runnerBin)
+    }
+
+    if (isMac && existsSync('/usr/sbin/taskpolicy')) {
+      commandParts.unshift('-a', '-t', '0', '-l', '0', bin)
+      bin = '/usr/sbin/taskpolicy'
     }
 
     const child = spawn(bin, commandParts, {

@@ -10,8 +10,10 @@ import { currentGlobalConfigVersion } from 'backend/constants/others'
 import { logError, logInfo, LogPrefix } from './logger'
 import {
   getCrossover,
+  getCustomWinePaths,
   getDefaultWine,
   getGamePortingToolkitWine,
+  getHomebrewWine,
   getLinuxWineSet,
   getSystemGamePortingToolkitWine,
   getWhisky,
@@ -161,7 +163,9 @@ abstract class GlobalConfig {
    * @returns Promise<Set<WineInstallation>>
    * @memberof GlobalConfig
    **/
-  public async getMacOsWineSet(): Promise<Set<WineInstallation>> {
+  public async getMacOsWineSet(
+    scanCustom = true
+  ): Promise<Set<WineInstallation>> {
     if (!isMac) {
       return new Set<WineInstallation>()
     }
@@ -172,6 +176,8 @@ abstract class GlobalConfig {
     const wineOnMac = await getWineOnMac()
     const wineskinWine = await getWineskinWine()
     const whiskyWine = await getWhisky()
+    const homebrewWine = await getHomebrewWine()
+    const customWineSet = scanCustom ? getCustomWinePaths() : new Set<WineInstallation>()
 
     return new Set([
       ...getGPTKWine,
@@ -179,7 +185,9 @@ abstract class GlobalConfig {
       ...crossover,
       ...wineOnMac,
       ...wineskinWine,
-      ...whiskyWine
+      ...whiskyWine,
+      ...homebrewWine,
+      ...customWineSet
     ])
   }
 
@@ -196,7 +204,7 @@ abstract class GlobalConfig {
     }
 
     if (isMac) {
-      const macOsWineSet = await this.getMacOsWineSet()
+      const macOsWineSet = await this.getMacOsWineSet(scanCustom)
       return [...macOsWineSet]
     }
 
