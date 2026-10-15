@@ -482,8 +482,8 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // High-performance render scale for ultrawide/4K (50% render scale reconstructed via TSR/FSR to native)
-      const optimalRenderScale = targetW >= 3840 ? '50.000000' : '66.666667'
+      // Render scale: Quality mode (70% render scale reconstructed via TSR to native 4K/Super-Ultrawide)
+      const optimalRenderScale = isUltra ? '70.000000' : '66.666667'
       if (/^sg\.ResolutionQuality=/m.test(content)) {
         content = content.replace(/^sg\.ResolutionQuality=.*/m, `sg.ResolutionQuality=${optimalRenderScale}`)
         modified = true
@@ -539,8 +539,9 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // Optimal scalability distribution for 100+ FPS:
-      // Textures & View Distance stay High (leveraging 36GB VRAM); heavy shadow/Lumen passes tuned to Medium
+      // Optimal scalability distribution for 4K Ultra graphics and 100+ FPS:
+      // sg.ShadingQuality=3 is critical for hair strand shadows, melanin and subsurface scattering
+      // sg.FoliageQuality=3 is critical for eliminating vegetation and tree draw-distance pop-in
       const scalabilityPresets: Record<string, number> = {
         'sg.ViewDistanceQuality': qualityLevel,
         'sg.AntiAliasingQuality': qualityLevel,
@@ -550,8 +551,8 @@ export function autoTuneGameEngineSettings(
         'sg.PostProcessQuality': 2,
         'sg.TextureQuality': Math.max(3, qualityLevel),
         'sg.EffectsQuality': 2,
-        'sg.FoliageQuality': 2,
-        'sg.ShadingQuality': 2
+        'sg.FoliageQuality': qualityLevel,
+        'sg.ShadingQuality': Math.max(3, qualityLevel)
       }
 
       for (const [key, val] of Object.entries(scalabilityPresets)) {
@@ -585,9 +586,47 @@ export function autoTuneGameEngineSettings(
     'r.VSync': '0',
     't.MaxFPS': '0',
     'r.FinishCurrentFrame': '0',
-    'r.SeparateTranslucency': '0',
+    // Separate Translucency: MUST be enabled for hair grooms, translucency passes & fog composition
+    'r.SeparateTranslucency': '1',
+    // Photorealistic Hair Strands Shading: Fixes hair bleaching, restores deep shadows & sky AO
+    'r.HairStrands.DeepShadow.SuperSampling': '1',
+    'r.HairStrands.SkyLighting.IntegrationType': '1',
+    'r.HairStrands.SkyLighting.SampleCount': '8',
+    'r.HairStrands.Visibility.MSAA.SamplePerPixel': '4',
+    'r.HairStrands.Strands': '1',
+    // Zero-Pop-in Foliage & View Distance: Render vegetation and trees seamlessly into horizon
+    'foliage.DensityScale': '1.0',
+    'foliage.LODDistanceScale': '2.5',
+    'foliage.CullDistanceScale': '2.5',
+    'foliage.MinimumScreenSize': '0.00001',
+    'r.StaticMeshLODDistanceScale': '2.0',
+    'r.ViewDistanceScale': '2.0',
+    // High-Fidelity Nanite Micro-Polygon Geometry (no geometric decimation popping)
+    'r.Nanite.MaxPixelsPerEdge': '1.0',
+    'r.Nanite.ViewiblityQueryPreservation': '1',
+    'r.Nanite.PersistentThreadsCulling': '0',
+    // Crisp Atmospheric Volumetric Fog (replaces flat milky haze with rich 3D light shafts)
+    'r.VolumetricFog': '1',
+    'r.VolumetricFog.GridPixelSize': '8',
+    'r.VolumetricFog.GridSizeZ': '128',
+    'r.VolumetricFog.HistoryMissSupersampleCount': '4',
+    // Precision Virtual Shadow Maps
+    'r.Shadow.Virtual.Enable': '1',
+    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '0',
+    'r.Shadow.Virtual.ResolutionLodBiasLocal': '0',
+    'r.Shadow.Virtual.Cache.MaxPageAge': '128',
+    // Balanced Lumen Global Illumination & Reflections
+    'r.Lumen.GlobalIllumination.Quality': '2',
+    'r.Lumen.Reflections.Allow': '1',
+    'r.Lumen.Reflections.Hardware': '0',
+    'r.LumenScene.Radiosity': '1',
+    'r.Lumen.DiffuseFilter.Quality': '1',
+    'r.Lumen.ScreenProbeGather.DownsampleFactor': '8',
+    'r.Lumen.ScreenProbeGather.TracingOctahedronResolution': '8',
+    'r.LumenScene.SurfaceCache.CardResolutionFactor': '0.8',
     // Frontier Crystal Clarity: Remove muddy film grain, lens distortion, chromatic aberration, and blur
-    'r.Tonemapper.Sharpen': '0.8',
+    'r.Tonemapper.Sharpen': '0.6',
+    'r.Tonemapper.Quality': '5',
     'r.DepthOfFieldQuality': '0',
     'r.NT.DOF.NTBokehTransform': '0',
     'r.NT.DOF.RotationalBokeh': '0',
@@ -600,31 +639,9 @@ export function autoTuneGameEngineSettings(
     'r.NT.Lens.ChromaticAberration.Intensity': '0',
     'r.NT.Lens.Distortion.Intensity': '0',
     'r.NT.Lens.Distortion.Stretch': '0',
-    'r.Tonemapper.Quality': '1',
     // Aspect ratio & cinematic letterbox removal (Full screen rendering on 16:9, 21:9, and 32:9)
     'r.NT.AllowAspectRatioHorizontalExtension': '1',
     'r.NT.EnableConstrainAspectRatio': '0',
-    // Optimized Virtual Shadow Maps for Nanite (lod bias +2 cuts page table overhead and avoids stall)
-    'r.Shadow.Virtual.Enable': '1',
-    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '2',
-    'r.Shadow.Virtual.ResolutionLodBiasLocal': '2',
-    'r.Shadow.Virtual.Cache.MaxPageAge': '128',
-    // Nanite Sub-pixel Geometry balancing and disable persistent threads for D3DMetal stability
-    'r.Nanite.MaxPixelsPerEdge': '2.5',
-    'r.Nanite.ViewiblityQueryPreservation': '1',
-    'r.Nanite.PersistentThreadsCulling': '0',
-    // Ultra-Fast Atmospheric Lighting (Volumetric Fog off saves 5ms of GPU time)
-    'r.VolumetricFog': '0',
-    // High-Performance Lumen Global Illumination (Screen-space reflections save 4ms of GPU time)
-    'r.Lumen.GlobalIllumination.Quality': '1',
-    'r.Lumen.Reflections.Allow': '0',
-    'r.LumenScene.Radiosity': '0',
-    'r.Lumen.DiffuseFilter.Quality': '0',
-    'r.Lumen.ScreenProbeGather.DownsampleFactor': '16',
-    'r.Lumen.ScreenProbeGather.TracingOctahedronResolution': '8',
-    'r.LumenScene.SurfaceCache.CardResolutionFactor': '0.6',
-    'foliage.DensityScale': '0.65',
-    'r.Tonemapper.Sharpen': '0.75',
     // Dedicated Texture Streaming Pool for M4 Max Unified Memory (zero low-res mipmap blur)
     'r.Streaming.PoolSize': isUltra ? '16384' : '8192',
     'r.Streaming.LimitPoolSizeToVRAM': '0',
@@ -633,21 +650,21 @@ export function autoTuneGameEngineSettings(
 
   const tsrSettings: Record<string, string> = {
     'r.AntiAliasingMethod': '4',
-    'r.ScreenPercentage': '50',
+    'r.ScreenPercentage': '70',
     'r.TemporalAA.Quality': '2',
     'r.TemporalAACatmullRom': '1',
     'r.TemporalAAPauseCorrect': '1',
     'r.TemporalAA.HistoryScreenpercentage': '100',
-    'r.TSR.History.UpdateQuality': '2',
+    'r.TSR.History.UpdateQuality': '3',
     'r.TSR.History.GrandReprojection': '1',
     'r.TSR.ShadingRejection.Flickering': '1',
     'r.TSR.ShadingRejection.Flickering.Period': '2',
-    'r.TSR.ShadingRejection.SampleCount': '0',
+    'r.TSR.ShadingRejection.SampleCount': '2',
     'r.TSR.ShadingRejection.ExposureOffset': '3.0',
-    'r.TSR.RejectionAntiAliasingQuality': '1',
-    'r.TSR.Velocity.WeightClampingSampleCount': '1',
+    'r.TSR.RejectionAntiAliasingQuality': '2',
+    'r.TSR.Velocity.WeightClampingSampleCount': '2',
     'r.TSR.Velocity.Extrapolation': '1',
-    'r.Tonemapper.Sharpen': '0.8'
+    'r.Tonemapper.Sharpen': '0.6'
   }
 
   for (const engineIniPath of engineIniFiles) {
@@ -707,7 +724,7 @@ export function autoTuneGameEngineSettings(
 
   // 3. Search for Unreal Engine ConsoleVariables.ini files in AppData/Local (deep search depth 12)
   const cvarFiles = findFilesInDir(baseUsersDir, 'ConsoleVariables.ini', 12)
-  const cvarBlock = `[Startup]\nr.VolumetricFog=0\nr.Lumen.Reflections.Allow=0\nr.Lumen.GlobalIllumination.Quality=1\nr.Lumen.ScreenProbeGather.DownsampleFactor=16\nr.LumenScene.Radiosity=0\nr.Shadow.Virtual.ResolutionLodBiasDirectional=2\nr.Shadow.Virtual.ResolutionLodBiasLocal=2\nr.Nanite.PersistentThreadsCulling=0\nr.Nanite.MaxPixelsPerEdge=2.5\nfoliage.DensityScale=0.65\nr.Tonemapper.Sharpen=0.75\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
+  const cvarBlock = `[Startup]\nr.SeparateTranslucency=1\nr.HairStrands.DeepShadow.SuperSampling=1\nr.HairStrands.SkyLighting.IntegrationType=1\nr.HairStrands.SkyLighting.SampleCount=8\nr.HairStrands.Visibility.MSAA.SamplePerPixel=4\nr.HairStrands.Strands=1\nfoliage.DensityScale=1.0\nfoliage.LODDistanceScale=2.5\nfoliage.CullDistanceScale=2.5\nfoliage.MinimumScreenSize=0.00001\nr.StaticMeshLODDistanceScale=2.0\nr.ViewDistanceScale=2.0\nr.Nanite.PersistentThreadsCulling=0\nr.Nanite.MaxPixelsPerEdge=1.0\nr.VolumetricFog=1\nr.VolumetricFog.GridPixelSize=8\nr.VolumetricFog.GridSizeZ=128\nr.Shadow.Virtual.ResolutionLodBiasDirectional=0\nr.Shadow.Virtual.ResolutionLodBiasLocal=0\nr.Lumen.Reflections.Allow=1\nr.Lumen.GlobalIllumination.Quality=2\nr.Lumen.ScreenProbeGather.DownsampleFactor=8\nr.LumenScene.Radiosity=1\nr.Lumen.DiffuseFilter.Quality=1\nr.Tonemapper.Sharpen=0.6\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
   for (const cvarPath of cvarFiles) {
     try {
       let content = existsSync(cvarPath) ? readFileSync(cvarPath, 'utf-8') : ''
@@ -745,11 +762,10 @@ export function autoTuneSaveGameSettings(
 
   if (!baseUsersDir) return
 
-  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned to 1792x504
-  // to achieve high framerates (80-100+ FPS) without hitting UE5 Nanite/Lumen fill-rate caps or AGX compiler limits.
-  const isSuperUltrawide = profile.targetResolution.width >= 3840
-  const targetW = isSuperUltrawide ? 1792 : profile.targetResolution.width
-  const targetH = isSuperUltrawide ? 504 : profile.targetResolution.height
+  // Target resolution maps 1:1 to the native display resolution (e.g. 5120x1440)
+  // Internal rendering scaling is handled cleanly via TSR/upscaler to guarantee maximum sharpness.
+  const targetW = profile.targetResolution.width
+  const targetH = profile.targetResolution.height
 
   // 1. Tune SystemSettings.Windows.sav (Resolution & FirstLaunch flag)
   const systemSavFiles = findFilesInDir(baseUsersDir, 'SystemSettings.Windows.sav', 12)
@@ -934,15 +950,14 @@ export async function tuneWinePrefixForMac(
         modified = true
       }
 
-      // Configure [Software\\Wine\\Mac Driver] for 1:1 Direct hardware pixel presentation
-      // Setting RetinaMode="n" ensures Direct presentation without WindowServer downscaled compositing,
-      // unlocking full 144Hz high refresh rate and true 4K/5K pixel-perfect sharpness.
+      // Configure [Software\\Wine\\Mac Driver] for native Retina / HiDPI pixel presentation
+      // Setting RetinaMode="y" allows games to render directly into the native display resolution (5120x1440 / 4K)
       if (!content.includes('[Software\\\\Wine\\\\Mac Driver]')) {
-        const macDriverBlock = `\n[Software\\\\Wine\\\\Mac Driver] ${Math.floor(Date.now() / 1000)}\n#time=1d9700000000000\n"RetinaMode"="n"\n"WindowsShouldFloat"="n"\n`
+        const macDriverBlock = `\n[Software\\\\Wine\\\\Mac Driver] ${Math.floor(Date.now() / 1000)}\n#time=1d9700000000000\n"RetinaMode"="y"\n"WindowsShouldFloat"="n"\n`
         content += macDriverBlock
         modified = true
-      } else if (content.includes('"RetinaMode"="y"')) {
-        content = content.replace('"RetinaMode"="y"', '"RetinaMode"="n"')
+      } else if (content.includes('"RetinaMode"="n"')) {
+        content = content.replace('"RetinaMode"="n"', '"RetinaMode"="y"')
         modified = true
       }
 
