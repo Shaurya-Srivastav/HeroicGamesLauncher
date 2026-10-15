@@ -236,28 +236,44 @@ export async function getWineOnMac(): Promise<Set<WineInstallation>> {
 
   winePaths.forEach((winePath) => {
     const infoFilePath = join(winePath, 'Contents/Info.plist')
+    let version = ''
+    let name = winePath.split('/').pop() || 'Wine'
+
     if (winePath && existsSync(infoFilePath)) {
-      const info = plistParse(
-        readFileSync(infoFilePath, 'utf-8')
-      ) as PlistObject
-      const version = info['CFBundleShortVersionString'] || ''
-      const name = info['CFBundleName'] || ''
-      let wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
-      if (!existsSync(wineBin)) {
-        // Fallback to wine if wine64 is not found
-        wineBin = join(winePath, '/Contents/Resources/wine/bin/wine')
-      }
-      if (existsSync(wineBin)) {
-        wineSet.add({
-          ...getWineExecs(wineBin),
-          lib: `${winePath}/Contents/Resources/wine/lib`,
-          lib32: `${winePath}/Contents/Resources/wine/lib`,
-          bin: wineBin,
-          name: `${name} - ${version}`,
-          type: 'wine',
-          ...getWineExecs(wineBin)
-        })
-      }
+      try {
+        const info = plistParse(readFileSync(infoFilePath, 'utf-8')) as PlistObject
+        version = (info['CFBundleShortVersionString'] as string) || ''
+        name = (info['CFBundleName'] as string) || name
+      } catch {}
+    }
+
+    let wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
+    if (!existsSync(wineBin)) {
+      wineBin = join(winePath, '/Contents/Resources/wine/bin/wine')
+    }
+    if (!existsSync(wineBin)) {
+      wineBin = join(winePath, 'bin/wine64')
+    }
+    if (!existsSync(wineBin)) {
+      wineBin = join(winePath, 'bin/wine')
+    }
+
+    if (existsSync(wineBin)) {
+      const libPath = existsSync(`${winePath}/Contents/Resources/wine/lib`)
+        ? `${winePath}/Contents/Resources/wine/lib`
+        : existsSync(join(winePath, 'lib'))
+          ? join(winePath, 'lib')
+          : ''
+
+      wineSet.add({
+        ...getWineExecs(wineBin),
+        lib: libPath,
+        lib32: libPath,
+        bin: wineBin,
+        name: version ? `${name} - ${version}` : name,
+        type: 'wine',
+        ...getWineExecs(wineBin)
+      })
     }
   })
 
@@ -379,27 +395,40 @@ export async function getGamePortingToolkitWine(): Promise<
 
   wineGPTKPaths.forEach((winePath) => {
     const infoFilePath = join(winePath, 'Contents/Info.plist')
+    let name = winePath.split('/').pop() || 'Game Porting Toolkit'
+
     if (existsSync(infoFilePath)) {
-      const wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
       try {
-        const name = winePath.split('/').pop() || ''
-        if (existsSync(wineBin)) {
-          gamePortingToolkitWine.add({
-            ...getWineExecs(wineBin),
-            lib: `${winePath}/Contents/Resources/wine/lib`,
-            lib32: `${winePath}/Contents/Resources/wine/lib`,
-            bin: wineBin,
-            name,
-            type: 'toolkit',
-            ...getWineExecs(wineBin)
-          })
-        }
-      } catch (error) {
-        logError(
-          [`Error getting wine version for GPTK ${wineBin};`, error],
-          LogPrefix.GlobalConfig
-        )
-      }
+        const info = plistParse(readFileSync(infoFilePath, 'utf-8')) as PlistObject
+        const version = (info['CFBundleShortVersionString'] as string) || ''
+        if (version) name = `${name} - ${version}`
+      } catch {}
+    }
+
+    let wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
+    if (!existsSync(wineBin)) {
+      wineBin = join(winePath, 'bin/wine64')
+    }
+    if (!existsSync(wineBin)) {
+      wineBin = join(winePath, 'bin/wine')
+    }
+
+    if (existsSync(wineBin)) {
+      const libPath = existsSync(`${winePath}/Contents/Resources/wine/lib`)
+        ? `${winePath}/Contents/Resources/wine/lib`
+        : existsSync(join(winePath, 'lib'))
+          ? join(winePath, 'lib')
+          : ''
+
+      gamePortingToolkitWine.add({
+        ...getWineExecs(wineBin),
+        lib: libPath,
+        lib32: libPath,
+        bin: wineBin,
+        name,
+        type: 'toolkit',
+        ...getWineExecs(wineBin)
+      })
     }
   })
 

@@ -20,7 +20,7 @@ import {
 } from './utils/compatibility_layers'
 import { backendEvents } from './backend_events'
 import { configStore } from './constants/key_value_stores'
-import { isFlatpak, isLinux, isMac, isWindows } from './constants/environment'
+import { isFlatpak, isIntelMac, isLinux, isMac, isWindows } from './constants/environment'
 import {
   configPath,
   sharedWinePrefix,
@@ -372,7 +372,7 @@ class GlobalConfigV0 extends GlobalConfig {
       disableUMU: false,
       verboseLogs: true,
       downloadProtonToSteam: false,
-      advertiseAvxForRosetta: isMac && defaultWine.type === 'toolkit',
+      advertiseAvxForRosetta: isMac && !isIntelMac,
       noTrayIcon: false,
       showValveProton: false,
       steamGridDbApiKey: '',

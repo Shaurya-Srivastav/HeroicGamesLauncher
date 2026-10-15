@@ -69,6 +69,12 @@ import gogPresence from './storeManagers/gog/presence'
 import { addRecentGame } from './recent_games/recent_games'
 import { tsStore } from './constants/key_value_stores'
 import {
+  getAntiDriverWarningOverrides,
+  getMacPerformanceEnvVars,
+  tuneWinePrefixForMac,
+  boostGameProcessPriority
+} from './utils/mac_optimizer'
+import {
   defaultUmuPath,
   sharedWinePrefix,
   flatpakHome,
@@ -419,7 +425,6 @@ function filterGameSettingsForLog(
       if (wineType) {
         if (wineType.type === 'wine') {
           delete gameSettings.wineCrossoverBottle
-          delete gameSettings.advertiseAvxForRosetta
           if (wineType.name?.includes('DXMT')) {
             delete gameSettings.autoInstallDxvk
           }
@@ -972,6 +977,23 @@ async function prepareWineLaunch(
     await download('battleye_runtime')
   }
 
+  if (isMac) {
+    try {
+      const targetPrefix =
+        prefixOrBottleFolder || gameSettings.winePrefix || sharedWinePrefix
+      await tuneWinePrefixForMac(targetPrefix, gameSettings, {
+        app_name: gameInfo.app_name,
+        folder_name: gameInfo.folder_name,
+        install_path: gameInfo.install?.install_path
+      })
+    } catch (err) {
+      logError(
+        ['[MacOptimizer] Failed to tune wine prefix:', err],
+        LogPrefix.Backend
+      )
+    }
+  }
+
   const envVars = setupWineEnvVars(gameSettings, gameInfo.folder_name)
 
   return { success: true, envVars: envVars }
@@ -1115,24 +1137,9 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
   // Add WINEPREFIX / STEAM_COMPAT_DATA_PATH / CX_BOTTLE
   const steamInstallPath = join(flatpakHome, '.steam', 'steam')
   switch (wineVersion.type) {
-    case 'wine': {
+    case 'wine':
       ret.WINEPREFIX = winePrefix
-
-      // Disable Winemenubuilder to not mess with file associations
-      const wmbDisableString = 'winemenubuilder.exe=d'
-      // If the user already set WINEDLLOVERRIDES, append to the end
-      const dllOverridesVar = gameSettings.enviromentOptions.find(
-        ({ key }) => key.toLowerCase() === 'winedlloverrides'
-      )
-      if (dllOverridesVar) {
-        ret[dllOverridesVar.key] =
-          dllOverridesVar.value + ';' + wmbDisableString
-      } else {
-        ret.WINEDLLOVERRIDES = wmbDisableString
-      }
-
       break
-    }
     case 'proton':
       ret.STEAM_COMPAT_CLIENT_INSTALL_PATH = steamInstallPath
       ret.WINEPREFIX = winePrefix
@@ -1145,6 +1152,24 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
     case 'toolkit':
       ret.WINEPREFIX = winePrefix
       break
+  }
+
+  // Configure WINEDLLOVERRIDES and platform optimizations
+  const dllOverridesVar = gameSettings.enviromentOptions.find(
+    ({ key }) => key.toLowerCase() === 'winedlloverrides'
+  )
+  const userOverrideValue = dllOverridesVar ? dllOverridesVar.value : undefined
+
+  if (isMac) {
+    ret.WINEDLLOVERRIDES = getAntiDriverWarningOverrides(userOverrideValue)
+    Object.assign(ret, getMacPerformanceEnvVars(gameSettings))
+  } else if (wineVersion.type === 'wine') {
+    const wmbDisableString = 'winemenubuilder.exe=d'
+    if (userOverrideValue) {
+      ret.WINEDLLOVERRIDES = `${userOverrideValue};${wmbDisableString}`
+    } else {
+      ret.WINEDLLOVERRIDES = wmbDisableString
+    }
   }
 
   if (gameSettings.showFps) {
@@ -1172,10 +1197,6 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
     (gameSettings.enableMsync || wineVersion.name.endsWith('-DXMT'))
   ) {
     ret.WINEMSYNC = '1'
-    // This is to solve a problem with d3dmetal
-    if (wineVersion.type === 'toolkit') {
-      ret.WINEESYNC = '1'
-    }
   }
   if (isLinux && gameSettings.enableFsync && wineVersion.type !== 'proton') {
     ret.WINEFSYNC = '1'
@@ -1291,12 +1312,13 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
       )
     }
   }
-  if (
-    gameSettings.advertiseAvxForRosetta &&
-    isMac &&
-    wineVersion.type === 'toolkit'
-  ) {
+  if (gameSettings.advertiseAvxForRosetta && isMac) {
     ret.ROSETTA_ADVERTISE_AVX = '1'
+    ret.ROSETTA_ENABLE_EXPERIMENTAL_AVX = '1'
+  }
+  if (isMac) {
+    ret.MTL_SHADER_VALIDATION = '0'
+    ret.MTL_DEVICE_WRAPPER_TYPE = '0'
   }
   // Workaround for Steam Input virtual gamepad not working for games launched through HGL from Steam
   // using deprecated WineGE/ProtonGE releases (<= 8.x) following SDL behavior change on version >= 2.30
@@ -1499,6 +1521,20 @@ async function runWineCommand({
     }
   }
 
+  if (isMac && winePrefix) {
+    try {
+      await tuneWinePrefixForMac(winePrefix, settings, {
+        install_path: gameInstallPath,
+        folder_name: startFolder || installFolderName
+      })
+    } catch (err) {
+      logError(
+        ['[MacOptimizer] Error tuning wine prefix in runWineCommand:', err],
+        LogPrefix.Backend
+      )
+    }
+  }
+
   if (!(await validWine(wineVersion))) {
     return { stdout: '', stderr: 'Invalid wine' }
   }
@@ -1538,6 +1574,10 @@ async function runWineCommand({
       env: env_vars,
       cwd: startFolder
     })
+
+    if (isMac && child.pid) {
+      boostGameProcessPriority(child.pid)
+    }
     child.stdout.setEncoding('utf-8')
     child.stderr.setEncoding('utf-8')
 
@@ -1736,6 +1776,10 @@ async function callRunner(
       env: { ...process.env, ...options?.env },
       signal: abortController.signal
     })
+
+    if (isMac && child.pid) {
+      boostGameProcessPriority(child.pid)
+    }
 
     const stdout = memoryLog()
     const stderr = memoryLog()

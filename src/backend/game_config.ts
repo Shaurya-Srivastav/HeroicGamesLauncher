@@ -300,6 +300,10 @@ class GameConfigV0 extends GameConfig {
       // set specific keys depending on the platform
       if (isMac) {
         defaultSettings.wineCrossoverBottle = wineCrossoverBottle
+        defaultSettings.enableMsync = true
+        defaultSettings.advertiseAvxForRosetta = true
+        defaultSettings.enableEsync = false
+        defaultSettings.enableFsync = false
       }
 
       defaultSettings.winePrefix = winePrefix || sharedWinePrefix

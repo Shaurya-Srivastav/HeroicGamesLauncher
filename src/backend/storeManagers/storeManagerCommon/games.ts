@@ -163,7 +163,13 @@ export async function launchGame(
     } = await prepareLaunch(gameSettings, logWriter, gameInfo, isNative)
 
     if (!isNative) {
-      await prepareWineLaunch(game, logWriter)
+      const { success: wineSuccess, failureReason: wineFailReason } =
+        await prepareWineLaunch(game, logWriter)
+      if (!wineSuccess) {
+        logWriter.logError(['Wine launch preparation failed:', wineFailReason])
+        launchCleanup()
+        return false
+      }
     }
 
     const wrappers = setupWrappers(
