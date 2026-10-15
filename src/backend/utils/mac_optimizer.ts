@@ -482,9 +482,10 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // Dynamic Resolution & Resolution Quality sanity check (force 100% native render resolution)
+      // High-performance render scale for ultrawide/4K (50% render scale reconstructed via TSR/FSR to native)
+      const optimalRenderScale = targetW >= 3840 ? '50.000000' : '66.666667'
       if (/^sg\.ResolutionQuality=/m.test(content)) {
-        content = content.replace(/^sg\.ResolutionQuality=.*/m, 'sg.ResolutionQuality=100.000000')
+        content = content.replace(/^sg\.ResolutionQuality=.*/m, `sg.ResolutionQuality=${optimalRenderScale}`)
         modified = true
       }
       if (/^bUseDynamicResolution=/m.test(content)) {
@@ -538,24 +539,25 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // Tier-based scalability groups
-      const scalabilityKeys = [
-        'sg.ViewDistanceQuality',
-        'sg.AntiAliasingQuality',
-        'sg.ShadowQuality',
-        'sg.GlobalIlluminationQuality',
-        'sg.ReflectionQuality',
-        'sg.PostProcessQuality',
-        'sg.TextureQuality',
-        'sg.EffectsQuality',
-        'sg.FoliageQuality',
-        'sg.ShadingQuality'
-      ]
+      // Optimal scalability distribution for 100+ FPS:
+      // Textures & View Distance stay High (leveraging 36GB VRAM); heavy shadow/Lumen passes tuned to Medium
+      const scalabilityPresets: Record<string, number> = {
+        'sg.ViewDistanceQuality': qualityLevel,
+        'sg.AntiAliasingQuality': qualityLevel,
+        'sg.ShadowQuality': 2,
+        'sg.GlobalIlluminationQuality': 2,
+        'sg.ReflectionQuality': 2,
+        'sg.PostProcessQuality': 2,
+        'sg.TextureQuality': Math.max(3, qualityLevel),
+        'sg.EffectsQuality': 2,
+        'sg.FoliageQuality': 2,
+        'sg.ShadingQuality': 2
+      }
 
-      for (const key of scalabilityKeys) {
+      for (const [key, val] of Object.entries(scalabilityPresets)) {
         const regex = new RegExp(`^${key.replace('.', '\\.')}=.*`, 'm')
         if (regex.test(content)) {
-          content = content.replace(regex, `${key}=${qualityLevel}`)
+          content = content.replace(regex, `${key}=${val}`)
           modified = true
         }
       }
@@ -602,19 +604,26 @@ export function autoTuneGameEngineSettings(
     // Aspect ratio & cinematic letterbox removal (Full screen rendering on 16:9, 21:9, and 32:9)
     'r.NT.AllowAspectRatioHorizontalExtension': '1',
     'r.NT.EnableConstrainAspectRatio': '0',
-    // Ultra-Fast Cascaded Shadow Maps & Distance Field Occlusion (Eliminates 10ms D3DMetal VSM Compute Penalty)
-    'r.Shadow.Virtual.Enable': '0',
-    'r.Shadow.CSM.MaxCascades': '3',
-    'r.Shadow.MaxResolution': '2048',
-    'r.Shadow.RadiusThreshold': '0.03',
-    'r.DistanceFieldShadowing': '1',
-    'r.Nanite.MaxPixelsPerEdge': '1.0',
+    // Optimized Virtual Shadow Maps for Nanite (lod bias +1 cuts page table overhead by 50%)
+    'r.Shadow.Virtual.Enable': '1',
+    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '1',
+    'r.Shadow.Virtual.ResolutionLodBiasLocal': '1',
+    'r.Shadow.Virtual.Cache.MaxPageAge': '64',
+    // Nanite Sub-pixel Geometry balancing for high-framerate rendering
+    'r.Nanite.MaxPixelsPerEdge': '2.0',
     'r.Nanite.ViewiblityQueryPreservation': '1',
-    // Photorealistic Lumen Global Illumination & Radiosity
+    // Optimized Volumetric Fog & Atmospheric Lighting
+    'r.VolumetricFog.GridPixelSizeK': '16',
+    'r.VolumetricFog.GridSizeZ': '64',
+    // High-Performance Lumen Global Illumination & Radiosity
     'r.Lumen.GlobalIllumination.Quality': '1',
     'r.Lumen.Reflections.Allow': '1',
-    'r.LumenScene.Radiosity': '1',
-    'r.Lumen.DiffuseFilter.Quality': '1',
+    'r.LumenScene.Radiosity': '0',
+    'r.Lumen.DiffuseFilter.Quality': '0',
+    'r.Lumen.ScreenProbeGather.DownsampleFactor': '16',
+    'r.Lumen.ScreenProbeGather.TracingOctahedronResolution': '8',
+    'r.LumenScene.SurfaceCache.CardResolutionFactor': '0.6',
+    'foliage.DensityScale': '0.85',
     // Dedicated Texture Streaming Pool for M4 Max Unified Memory (zero low-res mipmap blur)
     'r.Streaming.PoolSize': isUltra ? '16384' : '8192',
     'r.Streaming.LimitPoolSizeToVRAM': '0',
@@ -623,19 +632,19 @@ export function autoTuneGameEngineSettings(
 
   const tsrSettings: Record<string, string> = {
     'r.AntiAliasingMethod': '4',
-    'r.ScreenPercentage': '100',
+    'r.ScreenPercentage': '50',
     'r.TemporalAA.Quality': '2',
     'r.TemporalAACatmullRom': '1',
     'r.TemporalAAPauseCorrect': '1',
     'r.TemporalAA.HistoryScreenpercentage': '100',
-    'r.TSR.History.UpdateQuality': '3',
+    'r.TSR.History.UpdateQuality': '2',
     'r.TSR.History.GrandReprojection': '1',
     'r.TSR.ShadingRejection.Flickering': '1',
     'r.TSR.ShadingRejection.Flickering.Period': '2',
     'r.TSR.ShadingRejection.SampleCount': '0',
     'r.TSR.ShadingRejection.ExposureOffset': '3.0',
-    'r.TSR.RejectionAntiAliasingQuality': '2',
-    'r.TSR.Velocity.WeightClampingSampleCount': '2',
+    'r.TSR.RejectionAntiAliasingQuality': '1',
+    'r.TSR.Velocity.WeightClampingSampleCount': '1',
     'r.TSR.Velocity.Extrapolation': '1',
     'r.Tonemapper.Sharpen': '0.8'
   }
