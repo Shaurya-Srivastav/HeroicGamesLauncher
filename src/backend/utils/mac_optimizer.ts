@@ -604,25 +604,26 @@ export function autoTuneGameEngineSettings(
     // Aspect ratio & cinematic letterbox removal (Full screen rendering on 16:9, 21:9, and 32:9)
     'r.NT.AllowAspectRatioHorizontalExtension': '1',
     'r.NT.EnableConstrainAspectRatio': '0',
-    // Optimized Virtual Shadow Maps for Nanite (lod bias +3 drastically cuts page table overhead and avoids stall)
+    // Optimized Virtual Shadow Maps for Nanite (lod bias +2 cuts page table overhead and avoids stall)
     'r.Shadow.Virtual.Enable': '1',
-    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '3',
-    'r.Shadow.Virtual.ResolutionLodBiasLocal': '3',
-    'r.Shadow.Virtual.Cache.MaxPageAge': '256',
-    // Nanite Sub-pixel Geometry balancing for 100+ FPS rendering
-    'r.Nanite.MaxPixelsPerEdge': '3.0',
+    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '2',
+    'r.Shadow.Virtual.ResolutionLodBiasLocal': '2',
+    'r.Shadow.Virtual.Cache.MaxPageAge': '128',
+    // Nanite Sub-pixel Geometry balancing and disable persistent threads for D3DMetal stability
+    'r.Nanite.MaxPixelsPerEdge': '2.5',
     'r.Nanite.ViewiblityQueryPreservation': '1',
+    'r.Nanite.PersistentThreadsCulling': '0',
     // Ultra-Fast Atmospheric Lighting (Volumetric Fog off saves 5ms of GPU time)
     'r.VolumetricFog': '0',
-    // High-Performance Lumen Global Illumination (Fast direct probe cache saves ~4ms GPU time)
-    'r.Lumen.GlobalIllumination.Quality': '0',
+    // High-Performance Lumen Global Illumination (Screen-space reflections save 4ms of GPU time)
+    'r.Lumen.GlobalIllumination.Quality': '1',
     'r.Lumen.Reflections.Allow': '0',
     'r.LumenScene.Radiosity': '0',
     'r.Lumen.DiffuseFilter.Quality': '0',
     'r.Lumen.ScreenProbeGather.DownsampleFactor': '16',
     'r.Lumen.ScreenProbeGather.TracingOctahedronResolution': '8',
     'r.LumenScene.SurfaceCache.CardResolutionFactor': '0.6',
-    'foliage.DensityScale': '0.55',
+    'foliage.DensityScale': '0.65',
     'r.Tonemapper.Sharpen': '0.75',
     // Dedicated Texture Streaming Pool for M4 Max Unified Memory (zero low-res mipmap blur)
     'r.Streaming.PoolSize': isUltra ? '16384' : '8192',
@@ -706,7 +707,7 @@ export function autoTuneGameEngineSettings(
 
   // 3. Search for Unreal Engine ConsoleVariables.ini files in AppData/Local (deep search depth 12)
   const cvarFiles = findFilesInDir(baseUsersDir, 'ConsoleVariables.ini', 12)
-  const cvarBlock = `[Startup]\nr.VolumetricFog=0\nr.Lumen.Reflections.Allow=0\nr.Lumen.GlobalIllumination.Quality=0\nr.Lumen.ScreenProbeGather.DownsampleFactor=16\nr.LumenScene.Radiosity=0\nr.Shadow.Virtual.ResolutionLodBiasDirectional=3\nr.Shadow.Virtual.ResolutionLodBiasLocal=3\nr.Shadow.Virtual.Cache.MaxPageAge=256\nr.Nanite.MaxPixelsPerEdge=3.0\nfoliage.DensityScale=0.55\nr.Tonemapper.Sharpen=0.75\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
+  const cvarBlock = `[Startup]\nr.VolumetricFog=0\nr.Lumen.Reflections.Allow=0\nr.Lumen.GlobalIllumination.Quality=1\nr.Lumen.ScreenProbeGather.DownsampleFactor=16\nr.LumenScene.Radiosity=0\nr.Shadow.Virtual.ResolutionLodBiasDirectional=2\nr.Shadow.Virtual.ResolutionLodBiasLocal=2\nr.Nanite.PersistentThreadsCulling=0\nr.Nanite.MaxPixelsPerEdge=2.5\nfoliage.DensityScale=0.65\nr.Tonemapper.Sharpen=0.75\nr.FilmGrain=0\nr.NT.Lens.Distortion.Intensity=0\nr.DepthOfFieldQuality=0\nr.SceneColorFringeQuality=0\nr.VSync=0\nt.MaxFPS=0\nr.Streaming.PoolSize=16384\n`
   for (const cvarPath of cvarFiles) {
     try {
       let content = existsSync(cvarPath) ? readFileSync(cvarPath, 'utf-8') : ''
