@@ -504,17 +504,31 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // Exclusive Fullscreen (0) for Direct Metal presentation (bypasses WindowServer downscaling)
+      // Windowed Fullscreen / Borderless (1) for flawless Mac Wine display enumeration and swapchain mapping
       if (/^FullscreenMode=/m.test(content)) {
-        content = content.replace(/^FullscreenMode=.*/m, 'FullscreenMode=0')
+        content = content.replace(/^FullscreenMode=.*/m, 'FullscreenMode=1')
         modified = true
       }
       if (/^LastConfirmedFullscreenMode=/m.test(content)) {
-        content = content.replace(/^LastConfirmedFullscreenMode=.*/m, 'LastConfirmedFullscreenMode=0')
+        content = content.replace(/^LastConfirmedFullscreenMode=.*/m, 'LastConfirmedFullscreenMode=1')
         modified = true
       }
       if (/^PreferredFullscreenMode=/m.test(content)) {
-        content = content.replace(/^PreferredFullscreenMode=.*/m, 'PreferredFullscreenMode=0')
+        content = content.replace(/^PreferredFullscreenMode=.*/m, 'PreferredFullscreenMode=1')
+        modified = true
+      }
+
+      // Preemptively satisfy Unreal Engine startup benchmark to avoid low-end auto-downscaling
+      if (/^LastCPUBenchmarkResult=/m.test(content)) {
+        content = content.replace(/^LastCPUBenchmarkResult=.*/m, 'LastCPUBenchmarkResult=250.000000')
+        modified = true
+      }
+      if (/^LastGPUBenchmarkResult=/m.test(content)) {
+        content = content.replace(/^LastGPUBenchmarkResult=.*/m, 'LastGPUBenchmarkResult=350.000000')
+        modified = true
+      }
+      if (/^LastGPUBenchmarkMultiplier=/m.test(content)) {
+        content = content.replace(/^LastGPUBenchmarkMultiplier=.*/m, 'LastGPUBenchmarkMultiplier=1.000000')
         modified = true
       }
 
@@ -571,7 +585,7 @@ export function autoTuneGameEngineSettings(
     'r.FinishCurrentFrame': '0',
     'r.SeparateTranslucency': '0',
     // Frontier Crystal Clarity: Remove muddy film grain, lens distortion, chromatic aberration, and blur
-    'r.Tonemapper.Sharpen': '1.2',
+    'r.Tonemapper.Sharpen': '0.8',
     'r.DepthOfFieldQuality': '0',
     'r.NT.DOF.NTBokehTransform': '0',
     'r.NT.DOF.RotationalBokeh': '0',
@@ -584,17 +598,20 @@ export function autoTuneGameEngineSettings(
     'r.NT.Lens.ChromaticAberration.Intensity': '0',
     'r.NT.Lens.Distortion.Intensity': '0',
     'r.NT.Lens.Distortion.Stretch': '0',
-    'r.Tonemapper.Quality': '0',
+    'r.Tonemapper.Quality': '1',
     // Aspect ratio & cinematic letterbox removal (Full screen rendering on 16:9, 21:9, and 32:9)
     'r.NT.AllowAspectRatioHorizontalExtension': '1',
     'r.NT.EnableConstrainAspectRatio': '0',
-    // Photorealistic Virtual Shadow Maps & Nanite Sub-pixel Geometry
-    'r.Shadow.Virtual.Enable': '1',
-    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '-1',
+    // Ultra-Fast Cascaded Shadow Maps & Distance Field Occlusion (Eliminates 10ms D3DMetal VSM Compute Penalty)
+    'r.Shadow.Virtual.Enable': '0',
+    'r.Shadow.CSM.MaxCascades': '3',
+    'r.Shadow.MaxResolution': '2048',
+    'r.Shadow.RadiusThreshold': '0.03',
+    'r.DistanceFieldShadowing': '1',
     'r.Nanite.MaxPixelsPerEdge': '1.0',
     'r.Nanite.ViewiblityQueryPreservation': '1',
     // Photorealistic Lumen Global Illumination & Radiosity
-    'r.Lumen.GlobalIllumination.Quality': isUltra ? '2' : '1',
+    'r.Lumen.GlobalIllumination.Quality': '1',
     'r.Lumen.Reflections.Allow': '1',
     'r.LumenScene.Radiosity': '1',
     'r.Lumen.DiffuseFilter.Quality': '1',
@@ -606,11 +623,11 @@ export function autoTuneGameEngineSettings(
 
   const tsrSettings: Record<string, string> = {
     'r.AntiAliasingMethod': '4',
-    'r.ScreenPercentage': isUltra ? '85' : '75',
+    'r.ScreenPercentage': '100',
     'r.TemporalAA.Quality': '2',
     'r.TemporalAACatmullRom': '1',
     'r.TemporalAAPauseCorrect': '1',
-    'r.TemporalAA.HistoryScreenpercentage': '200',
+    'r.TemporalAA.HistoryScreenpercentage': '100',
     'r.TSR.History.UpdateQuality': '3',
     'r.TSR.History.GrandReprojection': '1',
     'r.TSR.ShadingRejection.Flickering': '1',
@@ -620,7 +637,7 @@ export function autoTuneGameEngineSettings(
     'r.TSR.RejectionAntiAliasingQuality': '2',
     'r.TSR.Velocity.WeightClampingSampleCount': '2',
     'r.TSR.Velocity.Extrapolation': '1',
-    'r.Tonemapper.Sharpen': '1.2'
+    'r.Tonemapper.Sharpen': '0.8'
   }
 
   for (const engineIniPath of engineIniFiles) {
@@ -675,6 +692,120 @@ export function autoTuneGameEngineSettings(
       }
     } catch (err) {
       logError(['[MacOptimizer] Error tuning Engine.ini:', err], LogPrefix.Backend)
+    }
+  }
+}
+
+/**
+ * Automatically inspects and fine-tunes custom Unreal Engine GVAS save game settings
+ * (such as Ninja Theory's GraphicsSettings.Windows.sav and SystemSettings.Windows.sav)
+ * to ensure native target resolution (e.g. 5120x1440) and state-of-the-art TSR upscaler
+ * are used instead of synthetic low-end fallback modes (like 1024x768 / FSR3 UltraPerformance).
+ */
+export function autoTuneSaveGameSettings(
+  prefixPath: string,
+  profile: MacHardwareProfile
+): void {
+  const usersDir = join(prefixPath, 'drive_c', 'users')
+  const pfxUsersDir = join(prefixPath, 'pfx', 'drive_c', 'users')
+  const baseUsersDir = existsSync(usersDir)
+    ? usersDir
+    : existsSync(pfxUsersDir)
+      ? pfxUsersDir
+      : null
+
+  if (!baseUsersDir) return
+
+  const targetW = profile.targetResolution.width
+  const targetH = profile.targetResolution.height
+
+  // 1. Tune SystemSettings.Windows.sav (Resolution & FirstLaunch flag)
+  const systemSavFiles = findFilesInDir(baseUsersDir, 'SystemSettings.Windows.sav', 12)
+  for (const sysSavPath of systemSavFiles) {
+    try {
+      const data = readFileSync(sysSavPath)
+      const marker = Buffer.from('TargetRes\0\x0f\0\0\0StructProperty\0\x08\0\0\0\0\0\0\0\t\0\0\0IntPoint\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0', 'binary')
+      const idx = data.indexOf(marker)
+      let modified = false
+      if (idx !== -1) {
+        const valOffset = idx + marker.length
+        const curW = data.readUInt32LE(valOffset)
+        const curH = data.readUInt32LE(valOffset + 4)
+        if (curW !== targetW || curH !== targetH) {
+          data.writeUInt32LE(targetW, valOffset)
+          data.writeUInt32LE(targetH, valOffset + 4)
+          modified = true
+        }
+      }
+
+      if (modified) {
+        writeFileSync(sysSavPath, data)
+        logInfo(
+          `[MacOptimizer] Auto-tuned ${sysSavPath} TargetRes -> ${targetW}x${targetH}`,
+          LogPrefix.Backend
+        )
+      }
+    } catch (err) {
+      logError(['[MacOptimizer] Error tuning SystemSettings.sav:', err], LogPrefix.Backend)
+    }
+  }
+
+  // 2. Tune GraphicsSettings.Windows.sav (UpscalerId & QualityMode)
+  const gfxSavFiles = findFilesInDir(baseUsersDir, 'GraphicsSettings.Windows.sav', 12)
+  for (const gfxSavPath of gfxSavFiles) {
+    try {
+      let data = readFileSync(gfxSavPath)
+      let modified = false
+
+      // Switch top-level UpscalerId from FSR3 to TSR
+      const oldUpscaler = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
+      const newUpscaler = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\x08\0\0\0\0\0\0\0\0\x04\0\0\0TSR\0', 'binary')
+      const uIdx = data.indexOf(oldUpscaler)
+      if (uIdx !== -1) {
+        data = Buffer.concat([
+          data.subarray(0, uIdx),
+          newUpscaler,
+          data.subarray(uIdx + oldUpscaler.length)
+        ])
+        modified = true
+      }
+
+      // Neutralize UltraPerformance -> Quality inside UpscalerSettings
+      const oldQm = Buffer.from('\x0e\0\0\0QualityModeId\0\r\0\0\0NameProperty\0\x15\0\0\0\0\0\0\0\0\x11\0\0\0UltraPerformance\0', 'binary')
+      const newQm = Buffer.from('\x0e\0\0\0QualityModeId\0\r\0\0\0NameProperty\0\x0c\0\0\0\0\0\0\0\0\x08\0\0\0Quality\0', 'binary')
+      let count = 0
+      while (true) {
+        const qIdx = data.indexOf(oldQm)
+        if (qIdx === -1) break
+        data = Buffer.concat([
+          data.subarray(0, qIdx),
+          newQm,
+          data.subarray(qIdx + oldQm.length)
+        ])
+        count++
+        modified = true
+      }
+
+      if (count > 0) {
+        const mapDecl = Buffer.from('\x11\0\0\0UpscalerSettings\0\x0c\0\0\0MapProperty\0', 'binary')
+        const mIdx = data.indexOf(mapDecl)
+        if (mIdx !== -1) {
+          const sizeOffset = mIdx + mapDecl.length
+          const oldSize = data.readBigUInt64LE(sizeOffset)
+          const newSize = oldSize - BigInt(count * 9)
+          data.writeBigUInt64LE(newSize, sizeOffset)
+        }
+      }
+
+      if (modified) {
+        writeFileSync(gfxSavPath, data)
+        logInfo(
+          `[MacOptimizer] Auto-tuned ${gfxSavPath} Upscaler -> TSR (UltraPerformance banished)`,
+          LogPrefix.Backend
+        )
+      }
+    } catch (err) {
+      logError(['[MacOptimizer] Error tuning GraphicsSettings.sav:', err], LogPrefix.Backend)
     }
   }
 }
@@ -855,6 +986,7 @@ export async function tuneWinePrefixForMac(
 
   // Automatically tune in-game graphics files (Unreal Engine / Unity)
   autoTuneGameEngineSettings(prefixPath, profile)
+  autoTuneSaveGameSettings(prefixPath, profile)
 
   // Automatically neutralize hardcoded hardware enforcers and driver popups in game binaries
   if (gameContext?.install_path && existsSync(gameContext.install_path)) {
