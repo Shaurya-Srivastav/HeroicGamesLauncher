@@ -1078,6 +1078,9 @@ export function getMacPerformanceEnvVars(
   // Suppress verbose Apple D3DMetal logging in production for maximum frame rate
   env.D3DMETAL_LOG_LEVEL = '0'
 
+  // Metal Performance HUD enabled by default for real-time framerate and GPU metrics
+  env.MTL_HUD_ENABLED = '1'
+
   return env
 }
 
