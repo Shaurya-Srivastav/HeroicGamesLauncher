@@ -148,6 +148,16 @@ export async function getMacHardwareProfile(): Promise<MacHardwareProfile> {
       }
     }
 
+    let nativeDisplayWidth = 2560
+    let nativeDisplayHeight = 1440
+    if (displayResolution && displayResolution.includes('x')) {
+      const parts = displayResolution.split('x').map((s) => parseInt(s.trim(), 10))
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1]) && parts[0] > 0) {
+        nativeDisplayWidth = parts[0]
+        nativeDisplayHeight = parts[1]
+      }
+    }
+
     const totalRamBytes = totalmem()
     const ramGB = Math.round(totalRamBytes / (1024 * 1024 * 1024))
 
@@ -159,15 +169,15 @@ export async function getMacHardwareProfile(): Promise<MacHardwareProfile> {
     if (ramGB >= 64 || gpuCores >= 32) {
       performanceTier = 'ultra'
       recommendedVramMB = '49152' // 48 GB
-      targetResolution = { width: 2560, height: 1440 }
+      targetResolution = { width: nativeDisplayWidth, height: nativeDisplayHeight }
     } else if (ramGB >= 32 || gpuCores >= 24) {
       performanceTier = 'ultra'
-      recommendedVramMB = '24576' // 24 GB
-      targetResolution = { width: 2560, height: 1440 }
+      recommendedVramMB = '36864' // 36 GB (Matches M4 Max 36GB Unified Memory)
+      targetResolution = { width: nativeDisplayWidth, height: nativeDisplayHeight }
     } else if (ramGB >= 24 || gpuCores >= 10) {
       performanceTier = 'high'
       recommendedVramMB = '16384' // 16 GB (Perfect for 24GB M5)
-      targetResolution = { width: 1920, height: 1200 }
+      targetResolution = { width: Math.min(nativeDisplayWidth, 2560), height: Math.min(nativeDisplayHeight, 1440) }
     } else if (ramGB >= 16) {
       performanceTier = 'high'
       recommendedVramMB = '10240' // 10 GB
@@ -439,7 +449,8 @@ export function autoTuneGameEngineSettings(
   const targetW = profile.targetResolution.width
   const targetH = profile.targetResolution.height
   const refreshRate = profile.displayRefreshRate
-  const qualityLevel = profile.performanceTier === 'ultra' ? 3 : profile.performanceTier === 'high' ? 2 : 1
+  const isUltra = profile.performanceTier === 'ultra'
+  const qualityLevel = isUltra ? 4 : profile.performanceTier === 'high' ? 3 : 2
 
   // 1. Search for Unreal Engine GameUserSettings.ini files in AppData/Local (deep search depth 12)
   const userSettingsFiles = findFilesInDir(baseUsersDir, 'GameUserSettings.ini', 12)
@@ -471,39 +482,43 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // Dynamic Resolution & Resolution Quality sanity check
-      if (/^sg\.ResolutionQuality=0(?:\.0+)?/m.test(content)) {
+      // Dynamic Resolution & Resolution Quality sanity check (force 100% native render resolution)
+      if (/^sg\.ResolutionQuality=/m.test(content)) {
         content = content.replace(/^sg\.ResolutionQuality=.*/m, 'sg.ResolutionQuality=100.000000')
         modified = true
       }
       if (/^bUseDynamicResolution=/m.test(content)) {
-        content = content.replace(/^bUseDynamicResolution=.*/m, 'bUseDynamicResolution=True')
+        content = content.replace(/^bUseDynamicResolution=.*/m, 'bUseDynamicResolution=False')
         modified = true
       }
 
-      // Refresh rate / FPS limit (align with ProMotion 120Hz or 60Hz)
+      // Uncap frame rate to allow GPU to render up to 144Hz display rate
       if (/^FrameRateLimit=/m.test(content)) {
-        content = content.replace(/^FrameRateLimit=.*/m, `FrameRateLimit=${refreshRate}.000000`)
+        content = content.replace(/^FrameRateLimit=.*/m, `FrameRateLimit=0.000000`)
         modified = true
       } else if (content.includes('[/Script/Engine.GameUserSettings]')) {
         content = content.replace(
           '[/Script/Engine.GameUserSettings]',
-          `[/Script/Engine.GameUserSettings]\nFrameRateLimit=${refreshRate}.000000`
+          `[/Script/Engine.GameUserSettings]\nFrameRateLimit=0.000000`
         )
         modified = true
       }
 
-      // Borderless Fullscreen for optimal macOS window compositing
+      // Exclusive Fullscreen (0) for Direct Metal presentation (bypasses WindowServer downscaling)
       if (/^FullscreenMode=/m.test(content)) {
-        content = content.replace(/^FullscreenMode=.*/m, 'FullscreenMode=1')
+        content = content.replace(/^FullscreenMode=.*/m, 'FullscreenMode=0')
         modified = true
       }
       if (/^LastConfirmedFullscreenMode=/m.test(content)) {
-        content = content.replace(/^LastConfirmedFullscreenMode=.*/m, 'LastConfirmedFullscreenMode=1')
+        content = content.replace(/^LastConfirmedFullscreenMode=.*/m, 'LastConfirmedFullscreenMode=0')
+        modified = true
+      }
+      if (/^PreferredFullscreenMode=/m.test(content)) {
+        content = content.replace(/^PreferredFullscreenMode=.*/m, 'PreferredFullscreenMode=0')
         modified = true
       }
 
-      // VSync: macOS Metal compositor already presents tear-free frames, disable software VSync latency
+      // VSync: Disable in-engine VSync to prevent 60Hz clamp on high-refresh displays
       if (/^bUseVSync=/m.test(content)) {
         content = content.replace(/^bUseVSync=.*/m, 'bUseVSync=False')
         modified = true
@@ -550,28 +565,62 @@ export function autoTuneGameEngineSettings(
     // Suppress Unreal Engine graphics driver version checks and warnings
     'r.WarnOfBadDrivers': '0',
     'r.DriverVersionCheck': '0',
-    // Virtual Shadow Maps optimization (Massive speed boost on Apple Silicon)
-    'r.Shadow.Virtual.Enable': '0',
-    'r.Shadow.CSM.MaxCascades': '2',
-    // Nanite geometry cluster tuning
-    'r.Nanite.MaxPixelsPerEdge': '2.0',
-    'r.Nanite.ViewiblityQueryPreservation': '0',
-    // Lumen global illumination optimization
-    'r.Lumen.GlobalIllumination.Quality': '1',
-    'r.Lumen.Reflections.Allow': '1',
-    'r.Lumen.DiffuseFilter.Quality': '1',
-    'r.LumenScene.Radiosity': '0',
-    // Aspect ratio & cinematic letterbox removal (Full screen rendering)
-    'r.NT.AllowAspectRatioHorizontalExtension': '0',
-    'r.NT.EnableConstrainAspectRatio': '0',
-    // Eliminate expensive post-process filter stalls
+    // Uncapped frame rate & presentation latency reduction
+    'r.VSync': '0',
+    't.MaxFPS': '0',
+    'r.FinishCurrentFrame': '0',
+    'r.SeparateTranslucency': '0',
+    // Frontier Crystal Clarity: Remove muddy film grain, lens distortion, chromatic aberration, and blur
+    'r.Tonemapper.Sharpen': '1.2',
+    'r.DepthOfFieldQuality': '0',
+    'r.NT.DOF.NTBokehTransform': '0',
+    'r.NT.DOF.RotationalBokeh': '0',
     'r.FilmGrain': '0',
+    'r.Tonemapper.GrainQuantization': '0',
     'r.MotionBlurQuality': '0',
+    'r.DefaultFeature.MotionBlur': '0',
+    'r.SceneColorFringeQuality': '0',
     'r.SceneColorFringeMethod': '0',
     'r.NT.Lens.ChromaticAberration.Intensity': '0',
-    // Multi-threaded render pipeline execution
-    'r.FinishCurrentFrame': '0',
-    'r.SeparateTranslucency': '0'
+    'r.NT.Lens.Distortion.Intensity': '0',
+    'r.NT.Lens.Distortion.Stretch': '0',
+    'r.Tonemapper.Quality': '0',
+    // Aspect ratio & cinematic letterbox removal (Full screen rendering on 16:9, 21:9, and 32:9)
+    'r.NT.AllowAspectRatioHorizontalExtension': '1',
+    'r.NT.EnableConstrainAspectRatio': '0',
+    // Photorealistic Virtual Shadow Maps & Nanite Sub-pixel Geometry
+    'r.Shadow.Virtual.Enable': '1',
+    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '-1',
+    'r.Nanite.MaxPixelsPerEdge': '1.0',
+    'r.Nanite.ViewiblityQueryPreservation': '1',
+    // Photorealistic Lumen Global Illumination & Radiosity
+    'r.Lumen.GlobalIllumination.Quality': isUltra ? '2' : '1',
+    'r.Lumen.Reflections.Allow': '1',
+    'r.LumenScene.Radiosity': '1',
+    'r.Lumen.DiffuseFilter.Quality': '1',
+    // Dedicated Texture Streaming Pool for M4 Max Unified Memory (zero low-res mipmap blur)
+    'r.Streaming.PoolSize': isUltra ? '16384' : '8192',
+    'r.Streaming.LimitPoolSizeToVRAM': '0',
+    'r.Streaming.HLODStrategy': '2'
+  }
+
+  const tsrSettings: Record<string, string> = {
+    'r.AntiAliasingMethod': '4',
+    'r.ScreenPercentage': isUltra ? '85' : '75',
+    'r.TemporalAA.Quality': '2',
+    'r.TemporalAACatmullRom': '1',
+    'r.TemporalAAPauseCorrect': '1',
+    'r.TemporalAA.HistoryScreenpercentage': '200',
+    'r.TSR.History.UpdateQuality': '3',
+    'r.TSR.History.GrandReprojection': '1',
+    'r.TSR.ShadingRejection.Flickering': '1',
+    'r.TSR.ShadingRejection.Flickering.Period': '2',
+    'r.TSR.ShadingRejection.SampleCount': '0',
+    'r.TSR.ShadingRejection.ExposureOffset': '3.0',
+    'r.TSR.RejectionAntiAliasingQuality': '2',
+    'r.TSR.Velocity.WeightClampingSampleCount': '2',
+    'r.TSR.Velocity.Extrapolation': '1',
+    'r.Tonemapper.Sharpen': '1.2'
   }
 
   for (const engineIniPath of engineIniFiles) {
@@ -579,6 +628,22 @@ export function autoTuneGameEngineSettings(
       let content = existsSync(engineIniPath) ? readFileSync(engineIniPath, 'utf-8') : ''
       let modified = false
 
+      // 1. Inject or update [/Script/Engine.RendererSettings] for TSR
+      if (!content.includes('[/Script/Engine.RendererSettings]')) {
+        const block = Object.entries(tsrSettings)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('\n')
+        content += `\n[/Script/Engine.RendererSettings]\n${block}\n`
+        modified = true
+      }
+
+      // 2. Inject or update [/Script/Engine.LocalPlayer] for ultrawide FOV maintain
+      if (!content.includes('[/Script/Engine.LocalPlayer]')) {
+        content += `\n[/Script/Engine.LocalPlayer]\nAspectRatioAxisConstraint=AspectRatio_MaintainXFOV\n`
+        modified = true
+      }
+
+      // 3. Inject or update [SystemSettings]
       if (!content.includes('[SystemSettings]')) {
         const block = Object.entries(frontierSettings)
           .map(([k, v]) => `${k}=${v}`)
@@ -586,7 +651,6 @@ export function autoTuneGameEngineSettings(
         content += `\n[SystemSettings]\n${block}\n`
         modified = true
       } else {
-        // Update or inject any missing frontier settings under [SystemSettings]
         for (const [key, val] of Object.entries(frontierSettings)) {
           const regex = new RegExp(`^${key.replace('.', '\\.')}=.*`, 'm')
           if (regex.test(content)) {
@@ -706,10 +770,15 @@ export async function tuneWinePrefixForMac(
         modified = true
       }
 
-      // Configure [Software\\Wine\\Mac Driver] for Retina display scaling
+      // Configure [Software\\Wine\\Mac Driver] for 1:1 Direct hardware pixel presentation
+      // Setting RetinaMode="n" ensures Direct presentation without WindowServer downscaled compositing,
+      // unlocking full 144Hz high refresh rate and true 4K/5K pixel-perfect sharpness.
       if (!content.includes('[Software\\\\Wine\\\\Mac Driver]')) {
-        const macDriverBlock = `\n[Software\\\\Wine\\\\Mac Driver] ${Math.floor(Date.now() / 1000)}\n#time=1d9700000000000\n"RetinaMode"="y"\n"WindowsShouldFloat"="n"\n`
+        const macDriverBlock = `\n[Software\\\\Wine\\\\Mac Driver] ${Math.floor(Date.now() / 1000)}\n#time=1d9700000000000\n"RetinaMode"="n"\n"WindowsShouldFloat"="n"\n`
         content += macDriverBlock
+        modified = true
+      } else if (content.includes('"RetinaMode"="y"')) {
+        content = content.replace('"RetinaMode"="y"', '"RetinaMode"="n"')
         modified = true
       }
 
