@@ -744,11 +744,11 @@ export function autoTuneSaveGameSettings(
 
   if (!baseUsersDir) return
 
-  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned to 1536x432
-  // to achieve high framerates (100+ FPS) without hitting UE5 Nanite/Lumen fill-rate caps.
+  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned to 1792x504
+  // to achieve high framerates (80-100+ FPS) without hitting UE5 Nanite/Lumen fill-rate caps or AGX compiler limits.
   const isSuperUltrawide = profile.targetResolution.width >= 3840
-  const targetW = isSuperUltrawide ? 1536 : profile.targetResolution.width
-  const targetH = isSuperUltrawide ? 432 : profile.targetResolution.height
+  const targetW = isSuperUltrawide ? 1792 : profile.targetResolution.width
+  const targetH = isSuperUltrawide ? 504 : profile.targetResolution.height
 
   // 1. Tune SystemSettings.Windows.sav (Resolution & FirstLaunch flag)
   const systemSavFiles = findFilesInDir(baseUsersDir, 'SystemSettings.Windows.sav', 12)
@@ -788,26 +788,15 @@ export function autoTuneSaveGameSettings(
       let data = readFileSync(gfxSavPath)
       let modified = false
 
-      // Ensure top-level UpscalerId is set to XeSS (or replaces FSR3 with XeSS)
-      const fsrDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
-      const xessDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0XeSS\0', 'binary')
-      const fIdx = data.indexOf(fsrDecl)
-      if (fIdx !== -1) {
-        data = Buffer.concat([
-          data.subarray(0, fIdx),
-          xessDecl,
-          data.subarray(fIdx + fsrDecl.length)
-        ])
-        modified = true
-      }
-
+      // Ensure top-level UpscalerId is set to FSR3
       const noneMarker = Buffer.from('\x05\0\0\0None\0\x11\0\0\0UpscalerSettings\0', 'binary')
+      const upscalerDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
       const nIdx = data.indexOf(noneMarker)
       if (nIdx !== -1) {
         const splitPos = nIdx + 10
         data = Buffer.concat([
           data.subarray(0, splitPos),
-          xessDecl,
+          upscalerDecl,
           data.subarray(splitPos)
         ])
         modified = true
