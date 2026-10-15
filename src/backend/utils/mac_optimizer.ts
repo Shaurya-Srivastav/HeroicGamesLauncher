@@ -482,8 +482,8 @@ export function autoTuneGameEngineSettings(
         modified = true
       }
 
-      // Render scale: Quality mode (70% render scale reconstructed via TSR to native 4K/Super-Ultrawide)
-      const optimalRenderScale = isUltra ? '70.000000' : '66.666667'
+      // Render scale: Balanced mode (55% render scale reconstructed via TSR to native 5120x1440 for 100+ FPS)
+      const optimalRenderScale = isUltra ? '55.000000' : '66.666667'
       if (/^sg\.ResolutionQuality=/m.test(content)) {
         content = content.replace(/^sg\.ResolutionQuality=.*/m, `sg.ResolutionQuality=${optimalRenderScale}`)
         modified = true
@@ -608,22 +608,14 @@ export function autoTuneGameEngineSettings(
     // Zero Fog: Banishes the milky grey atmospheric fog completely for crystalline clarity and +5ms FPS
     'r.Fog': '0',
     'r.VolumetricFog': '0',
-    // High-Speed Virtual Shadow Maps
-    'r.Shadow.Virtual.Enable': '1',
-    'r.Shadow.Virtual.ResolutionLodBiasDirectional': '1',
-    'r.Shadow.Virtual.ResolutionLodBiasLocal': '1',
-    'r.Shadow.Virtual.Cache.MaxPageAge': '128',
-    // Fast Lumen Global Illumination for 100+ FPS
-    'r.Lumen.GlobalIllumination.Quality': '1',
-    'r.Lumen.Reflections.Allow': '0',
-    'r.Lumen.Reflections.Hardware': '0',
-    'r.LumenScene.Radiosity': '0',
-    'r.Lumen.DiffuseFilter.Quality': '1',
-    'r.Lumen.ScreenProbeGather.DownsampleFactor': '8',
-    'r.Lumen.ScreenProbeGather.TracingOctahedronResolution': '8',
-    'r.LumenScene.SurfaceCache.CardResolutionFactor': '0.7',
+    // Screen Space Global Illumination (SSGI) & Screen Space Reflections: Bypasses heavy Lumen raymarching to unlock 100+ FPS
+    'r.DynamicGlobalIlluminationMethod': '2',
+    'r.ReflectionMethod': '2',
+    // Standard Cascaded Shadow Maps: Replaces VSM page faults for ultra-high GPU throughput on Apple Silicon
+    'r.Shadow.Virtual.Enable': '0',
+    'r.ShadowQuality': '1',
     // Frontier Crystal Clarity: Remove muddy film grain, lens distortion, chromatic aberration, and blur
-    'r.Tonemapper.Sharpen': '0.75',
+    'r.Tonemapper.Sharpen': '0.8',
     'r.Tonemapper.Quality': '1',
     'r.DepthOfFieldQuality': '0',
     'r.NT.DOF.NTBokehTransform': '0',
@@ -648,21 +640,21 @@ export function autoTuneGameEngineSettings(
 
   const tsrSettings: Record<string, string> = {
     'r.AntiAliasingMethod': '4',
-    'r.ScreenPercentage': '70',
+    'r.ScreenPercentage': '55',
     'r.TemporalAA.Quality': '2',
     'r.TemporalAACatmullRom': '1',
     'r.TemporalAAPauseCorrect': '1',
     'r.TemporalAA.HistoryScreenpercentage': '100',
-    'r.TSR.History.UpdateQuality': '3',
+    'r.TSR.History.UpdateQuality': '2',
     'r.TSR.History.GrandReprojection': '1',
     'r.TSR.ShadingRejection.Flickering': '1',
     'r.TSR.ShadingRejection.Flickering.Period': '2',
-    'r.TSR.ShadingRejection.SampleCount': '2',
+    'r.TSR.ShadingRejection.SampleCount': '1',
     'r.TSR.ShadingRejection.ExposureOffset': '3.0',
-    'r.TSR.RejectionAntiAliasingQuality': '2',
-    'r.TSR.Velocity.WeightClampingSampleCount': '2',
+    'r.TSR.RejectionAntiAliasingQuality': '1',
+    'r.TSR.Velocity.WeightClampingSampleCount': '1',
     'r.TSR.Velocity.Extrapolation': '1',
-    'r.Tonemapper.Sharpen': '0.6'
+    'r.Tonemapper.Sharpen': '0.8'
   }
 
   for (const engineIniPath of engineIniFiles) {
