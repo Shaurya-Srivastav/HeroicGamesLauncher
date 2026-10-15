@@ -304,7 +304,7 @@ d3d11.relaxedBarriers = True
 }
 
 /**
- * Recursively searches a directory up to maxDepth for a target filename.
+ * Recursively searches a directory up to maxDepth for a target filename or extension.
  */
 function findFilesInDir(
   dir: string,
@@ -323,7 +323,11 @@ function findFilesInDir(
         const stat = statSync(fullPath)
         if (stat.isDirectory()) {
           results.push(...findFilesInDir(fullPath, targetFileName, maxDepth, currentDepth + 1))
-        } else if (entry.toLowerCase() === targetFileName.toLowerCase()) {
+        } else if (
+          !targetFileName ||
+          entry.toLowerCase() === targetFileName.toLowerCase() ||
+          (targetFileName.startsWith('.') && entry.toLowerCase().endsWith(targetFileName.toLowerCase()))
+        ) {
           results.push(fullPath)
         }
       } catch {}
@@ -331,6 +335,86 @@ function findFilesInDir(
   } catch {}
 
   return results
+}
+
+/**
+ * Automatically inspects game executables for hardcoded hardware checks that artificially
+ * block modern Apple Silicon execution (such as Ninja Theory's NTPCNaniteAndVSMSupportEnforcer
+ * or Unreal Engine's legacy driver check popups) and seamlessly neutralizes them.
+ */
+export function autoPatchUe5EnforcerAndDriverChecks(gameDir: string): void {
+  if (!existsSync(gameDir)) return
+
+  try {
+    const exeFiles = findFilesInDir(gameDir, '.exe', 5)
+
+    // Signatures:
+    // 1. Nanite & VSM Support Enforcer check:
+    // Original: 84 db 74 08 84 c0 0f 85 8a 05 00 00
+    // (test bl, bl; je +8; test al, al; jne +0x58a -> success return)
+    // Patched:  e9 91 05 00 00 90 90 90 90 90 90 90 (jmp +0x591; nop * 7)
+    const naniteSig = Buffer.from('84db740884c00f858a050000', 'hex')
+    const nanitePatch = Buffer.from('e99105000090909090909090', 'hex')
+
+    // 2. Unreal Engine Bad Driver Warning check:
+    // Original: 85 c9 0f 84 f2 10 00 00 (test ecx, ecx; je +0x10f2)
+    // Patched:  e9 f5 10 00 00 90 90 90 (jmp +0x10f5; nop * 3)
+    const driverSig = Buffer.from('85c90f84f2100000', 'hex')
+    const driverPatch = Buffer.from('e9f5100000909090', 'hex')
+
+    for (const exePath of exeFiles) {
+      try {
+        const stat = statSync(exePath)
+        // Skip small stub loaders (< 5MB)
+        if (stat.size < 5 * 1024 * 1024) continue
+
+        const buf = readFileSync(exePath)
+        let modified = false
+
+        const naniteIdx = buf.indexOf(naniteSig)
+        if (naniteIdx !== -1) {
+          nanitePatch.copy(buf, naniteIdx)
+          modified = true
+          logInfo(
+            `[MacOptimizer] Neutralized Nanite & VSM support enforcer in ${basename(exePath)}`,
+            LogPrefix.Backend
+          )
+        }
+
+        const driverIdx = buf.indexOf(driverSig)
+        if (driverIdx !== -1) {
+          driverPatch.copy(buf, driverIdx)
+          modified = true
+          logInfo(
+            `[MacOptimizer] Neutralized Unreal Engine driver warning check in ${basename(exePath)}`,
+            LogPrefix.Backend
+          )
+        }
+
+        if (modified) {
+          const bakPath = `${exePath}.bak`
+          if (!existsSync(bakPath)) {
+            writeFileSync(bakPath, readFileSync(exePath))
+          }
+          writeFileSync(exePath, buf)
+          logInfo(
+            `[MacOptimizer] Successfully auto-patched game binary: ${exePath}`,
+            LogPrefix.Backend
+          )
+        }
+      } catch (e) {
+        logError(
+          [`[MacOptimizer] Error checking binary ${exePath}:`, e],
+          LogPrefix.Backend
+        )
+      }
+    }
+  } catch (err) {
+    logError(
+      ['[MacOptimizer] Error patching UE5 enforcers:', err],
+      LogPrefix.Backend
+    )
+  }
 }
 
 /**
@@ -463,6 +547,9 @@ export function autoTuneGameEngineSettings(
   const engineIniFiles = findFilesInDir(baseUsersDir, 'Engine.ini', 12)
 
   const frontierSettings: Record<string, string> = {
+    // Suppress Unreal Engine graphics driver version checks and warnings
+    'r.WarnOfBadDrivers': '0',
+    'r.DriverVersionCheck': '0',
     // Virtual Shadow Maps optimization (Massive speed boost on Apple Silicon)
     'r.Shadow.Virtual.Enable': '0',
     'r.Shadow.CSM.MaxCascades': '2',
@@ -699,6 +786,14 @@ export async function tuneWinePrefixForMac(
 
   // Automatically tune in-game graphics files (Unreal Engine / Unity)
   autoTuneGameEngineSettings(prefixPath, profile)
+
+  // Automatically neutralize hardcoded hardware enforcers and driver popups in game binaries
+  if (gameContext?.install_path && existsSync(gameContext.install_path)) {
+    autoPatchUe5EnforcerAndDriverChecks(gameContext.install_path)
+  }
+  if (gameContext?.folder_name && existsSync(gameContext.folder_name)) {
+    autoPatchUe5EnforcerAndDriverChecks(gameContext.folder_name)
+  }
 }
 
 /**
