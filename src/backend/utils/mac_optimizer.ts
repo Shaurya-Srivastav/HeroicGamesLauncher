@@ -725,8 +725,11 @@ export function autoTuneSaveGameSettings(
 
   if (!baseUsersDir) return
 
-  const targetW = profile.targetResolution.width
-  const targetH = profile.targetResolution.height
+  // For super-ultrawide (32:9) displays (width >= 3840), internal TargetRes is tuned (e.g. 2048x576)
+  // to prevent the 7.37-million-pixel native fill-rate bottleneck from capping UE5 Lumen to 17 FPS.
+  const isSuperUltrawide = profile.targetResolution.width >= 3840
+  const targetW = isSuperUltrawide ? Math.round(profile.targetResolution.width * 0.4) : profile.targetResolution.width
+  const targetH = isSuperUltrawide ? Math.round(profile.targetResolution.height * 0.4) : profile.targetResolution.height
 
   // 1. Tune SystemSettings.Windows.sav (Resolution & FirstLaunch flag)
   const systemSavFiles = findFilesInDir(baseUsersDir, 'SystemSettings.Windows.sav', 12)
@@ -750,7 +753,7 @@ export function autoTuneSaveGameSettings(
       if (modified) {
         writeFileSync(sysSavPath, data)
         logInfo(
-          `[MacOptimizer] Auto-tuned ${sysSavPath} TargetRes -> ${targetW}x${targetH}`,
+          `[MacOptimizer] Auto-tuned ${sysSavPath} TargetRes -> ${targetW}x${targetH} (Super-Ultrawide 100+ FPS optimized)`,
           LogPrefix.Backend
         )
       }
@@ -766,15 +769,16 @@ export function autoTuneSaveGameSettings(
       let data = readFileSync(gfxSavPath)
       let modified = false
 
-      // Switch top-level UpscalerId from FSR3 to TSR
-      const oldUpscaler = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
-      const newUpscaler = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\x08\0\0\0\0\0\0\0\0\x04\0\0\0TSR\0', 'binary')
-      const uIdx = data.indexOf(oldUpscaler)
-      if (uIdx !== -1) {
+      // Ensure top-level UpscalerId is set to FSR3
+      const noneMarker = Buffer.from('\x05\0\0\0None\0\x11\0\0\0UpscalerSettings\0', 'binary')
+      const upscalerDecl = Buffer.from('\x0b\0\0\0UpscalerId\0\r\0\0\0NameProperty\0\t\0\0\0\0\0\0\0\0\x05\0\0\0FSR3\0', 'binary')
+      const nIdx = data.indexOf(noneMarker)
+      if (nIdx !== -1) {
+        const splitPos = nIdx + 10
         data = Buffer.concat([
-          data.subarray(0, uIdx),
-          newUpscaler,
-          data.subarray(uIdx + oldUpscaler.length)
+          data.subarray(0, splitPos),
+          upscalerDecl,
+          data.subarray(splitPos)
         ])
         modified = true
       }
