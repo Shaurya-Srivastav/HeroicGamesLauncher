@@ -23,7 +23,7 @@ import {
   deleteAbortController
 } from '../../utils/aborthandler/aborthandler'
 import { BrowserWindow, dialog, Menu } from 'electron'
-import { execAsync, sendGameStatusUpdate } from 'backend/utils'
+import { sendGameStatusUpdate, spawnAsync } from 'backend/utils'
 import { isLinux, isMac } from 'backend/constants/environment'
 import { windowIcon } from 'backend/constants/paths'
 
@@ -166,8 +166,15 @@ export async function launchGame(
       const { success: wineSuccess, failureReason: wineFailReason } =
         await prepareWineLaunch(game, logWriter)
       if (!wineSuccess) {
-        logWriter.logError(['Wine launch preparation failed:', wineFailReason])
-        launchCleanup()
+        logWriter.logError(['Launch aborted:', wineFailReason])
+        launchCleanup(rpcClient)
+        if (wineFailReason) {
+          showDialogBoxModalAuto({
+            title: i18next.t('box.error.launchAborted', 'Launch aborted'),
+            message: wineFailReason,
+            type: 'ERROR'
+          })
+        }
         return false
       }
     }
@@ -221,10 +228,13 @@ export async function launchGame(
         if (isLinux || (isMac && !executable.endsWith('.app'))) {
           await chmod(executable, 0o775)
         }
+        // Gatekeeper refuses to run quarantined downloads that the user added
         if (isMac) {
-          try {
-            await execAsync(`xattr -dr com.apple.quarantine "${executable}"`).catch(() => {})
-          } catch {}
+          await spawnAsync('xattr', [
+            '-dr',
+            'com.apple.quarantine',
+            executable
+          ]).catch(() => undefined)
         }
       }
 

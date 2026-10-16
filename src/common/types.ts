@@ -269,6 +269,12 @@ export interface GameSettings {
   verboseLogs: boolean
   advertiseAvxForRosetta: boolean
   enableQuickSavesMenu: boolean
+  enableMetalFX: boolean
+  macRayTracing: boolean
+  macRetinaMode: boolean
+  macUnrealTweaks: boolean
+  macGamePatches: boolean
+  macPerformanceReport: boolean
 }
 
 export type Status =

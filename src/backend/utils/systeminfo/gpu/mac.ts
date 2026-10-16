@@ -1,20 +1,57 @@
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import type { GPUInfo } from '../index'
 
-const execPromise = promisify(exec)
+const execFileAsync = promisify(execFile)
 
-interface SPDisplayItem {
+interface SPDisplaysGpu {
   _name?: string
-  spdisplays_mtlgpufamilysupport?: string
-  sppci_cores?: string
   sppci_model?: string
+  sppci_cores?: string
   spdisplays_vendor?: string
-  [key: string]: unknown
+  'spdisplays_vendor-id'?: string
+  'spdisplays_device-id'?: string
+  spdisplays_mtlgpufamilysupport?: string
 }
 
-interface SPDisplaysOutput {
-  SPDisplaysDataType?: SPDisplayItem[]
+const KNOWN_VENDORS: Record<string, string> = {
+  '106b': 'Apple',
+  '1002': 'AMD',
+  '8086': 'Intel',
+  '10de': 'NVIDIA'
+}
+
+const toPciId = (id?: string) => id?.toLowerCase().replace(/^0x/, '') ?? ''
+
+export function parseMacGpus(profilerOutput: string): GPUInfo[] {
+  const { SPDisplaysDataType = [] } = JSON.parse(profilerOutput) as {
+    SPDisplaysDataType?: SPDisplaysGpu[]
+  }
+  return SPDisplaysDataType.map((gpu) => {
+    const vendorName = gpu.spdisplays_vendor?.replace(/^sppci_vendor_/, '')
+    // Apple Silicon GPUs are not PCI devices and report no IDs
+    const vendorId =
+      toPciId(gpu['spdisplays_vendor-id']) ||
+      (vendorName === 'Apple' ? '106b' : '')
+    const vendorString = KNOWN_VENDORS[vendorId] ?? vendorName
+    // The system info output already puts the vendor in front of the model
+    const fullModel = gpu.sppci_model ?? gpu._name ?? 'Unknown GPU'
+    const model =
+      vendorString && fullModel.startsWith(`${vendorString} `)
+        ? fullModel.slice(vendorString.length + 1)
+        : fullModel
+    const metalFamily = gpu.spdisplays_mtlgpufamilysupport?.match(/metal(\d+)/)
+
+    return {
+      deviceId: toPciId(gpu['spdisplays_device-id']),
+      vendorId,
+      deviceString: gpu.sppci_cores
+        ? `${model} (${gpu.sppci_cores}-core GPU)`
+        : model,
+      vendorString,
+      driverVersion: metalFamily ? `Metal ${metalFamily[1]}` : undefined
+    }
+  })
 }
 
 /**
@@ -22,56 +59,12 @@ interface SPDisplaysOutput {
  */
 export async function getGpuInfo_mac(): Promise<GPUInfo[]> {
   try {
-    const { stdout } = await execPromise(
-      'system_profiler SPDisplaysDataType -json'
-    )
-    const parsed: SPDisplaysOutput = JSON.parse(stdout)
-    const displays = parsed.SPDisplaysDataType || []
-
-    return displays.map((disp, idx) => {
-      const name = disp.sppci_model || disp._name || 'Apple GPU'
-      const cores = disp.sppci_cores ? ` (${disp.sppci_cores} cores)` : ''
-      const metalFamily = (disp.spdisplays_mtlgpufamilysupport || '')
-        .replace('spdisplays_', '')
-        .replace('metal', 'Metal ')
-
-      const vendorRaw = disp.spdisplays_vendor || ''
-      const isApple = vendorRaw.includes('Apple') || name.startsWith('Apple')
-      const isAMD =
-        vendorRaw.includes('AMD') ||
-        vendorRaw.includes('Advanced Micro') ||
-        name.includes('Radeon')
-      const isIntel = vendorRaw.includes('Intel')
-
-      let vendorString = 'Apple'
-      let vendorId = '106b'
-      if (isAMD) {
-        vendorString = 'AMD'
-        vendorId = '1002'
-      } else if (isIntel) {
-        vendorString = 'Intel'
-        vendorId = '8086'
-      } else if (!isApple) {
-        vendorString = vendorRaw.replace('sppci_vendor_', '') || 'Apple'
-      }
-
-      return {
-        deviceId: `0x${(idx + 1).toString(16).padStart(4, '0')}`,
-        vendorId: `0x${vendorId}`,
-        deviceString: `${name}${cores}`,
-        vendorString,
-        driverVersion: metalFamily || 'Metal'
-      }
-    })
+    const { stdout } = await execFileAsync('/usr/sbin/system_profiler', [
+      'SPDisplaysDataType',
+      '-json'
+    ])
+    return parseMacGpus(stdout)
   } catch {
-    return [
-      {
-        deviceId: '0x0001',
-        vendorId: '0x106b',
-        deviceString: 'Apple Silicon GPU',
-        vendorString: 'Apple',
-        driverVersion: 'Metal'
-      }
-    ]
+    return []
   }
 }

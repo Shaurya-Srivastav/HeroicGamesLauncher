@@ -6,7 +6,8 @@ import {
   Release,
   GameInfo,
   GameSettings,
-  GameStatus
+  GameStatus,
+  Type
 } from 'common/types'
 import axios from 'axios'
 import https from 'node:https'
@@ -66,6 +67,7 @@ import {
 } from './utils/systeminfo/gpu/pci_ids'
 import type { AppSettings, WineManagerStatus } from 'common/types'
 import { isUmuSupported } from './utils/compatibility_layers'
+import { rankMacRunners } from './utils/macos'
 import { getSystemInfo } from './utils/systeminfo'
 import { configStore } from './constants/key_value_stores'
 import { GITHUB_API } from './constants/urls'
@@ -897,25 +899,18 @@ export async function downloadDefaultWine() {
   // get list of wines on wineDownloaderInfoStore
   const availableWine = wineDownloaderInfoStore.get('wine-releases', [])
   const isMacOSUpToDate = await isMacSonomaOrHigher()
-  const release = availableWine.find((version) => {
-    if (isLinux) {
-      return version.type === 'Proton-CachyOS'
-    } else if (isMac) {
-      if (isIntelMac || !isMacOSUpToDate) {
-        return (
-          version.type === 'Wine-Crossover' ||
-          version.type === 'Wine-Staging-macOS'
-        )
-      } else {
-        return (
-          version.type === 'Game-Porting-Toolkit' ||
-          version.type === 'Wine-Crossover' ||
-          version.type === 'Wine-Staging-macOS'
-        )
-      }
-    }
-    return false
-  })
+  let preferredTypes: Type[] = []
+  if (isLinux) {
+    preferredTypes = ['Proton-CachyOS']
+  } else if (isMac) {
+    preferredTypes =
+      isIntelMac || !isMacOSUpToDate
+        ? ['Wine-Crossover']
+        : ['Game-Porting-Toolkit', 'Wine-Crossover']
+  }
+  const release = preferredTypes
+    .map((type) => availableWine.find((version) => version.type === type))
+    .find((version) => version !== undefined)
 
   if (!release) {
     logError('Could not find default wine version', LogPrefix.Backend)
@@ -931,7 +926,8 @@ export async function downloadDefaultWine() {
   if (result === 'success') {
     let downloadedWine = null
     try {
-      const wineList = await GlobalConfig.get().getAlternativeWine()
+      let wineList = await GlobalConfig.get().getAlternativeWine()
+      if (isMac) wineList = await rankMacRunners(wineList)
       // update the game config to use that wine
       downloadedWine = wineList[0]
       logInfo(`Changing wine version to ${downloadedWine.name}`)
@@ -999,7 +995,8 @@ export async function checkWineBeforeLaunch(
         return false
       }
     } else {
-      const wineList = await GlobalConfig.get().getAlternativeWine()
+      let wineList = await GlobalConfig.get().getAlternativeWine()
+      if (isMac) wineList = await rankMacRunners(wineList)
       const firstFoundWine = wineList[0]
 
       const isValidWine = await validWine(firstFoundWine)
@@ -1018,20 +1015,6 @@ export async function checkWineBeforeLaunch(
       }
 
       if (firstFoundWine && isValidWine) {
-        if (isMac) {
-          logInfo(
-            `[MacOptimizer] Auto-configuring optimal wine runner for Mac: ${firstFoundWine.name}`,
-            LogPrefix.Backend
-          )
-          gameSettings.wineVersion = firstFoundWine
-          GameConfig.get(gameInfo.app_name).setSetting(
-            'wineVersion',
-            firstFoundWine
-          )
-          GlobalConfig.get().setSetting('wineVersion', firstFoundWine)
-          return true
-        }
-
         const { response } = await ContinueWithFoundWine(
           gameSettings.wineVersion.name,
           firstFoundWine.name
@@ -1296,52 +1279,20 @@ export async function checkRosettaInstall() {
     return
   }
 
-  // The spawn itself fails when Rosetta is not installed
-  let isAvailable = await execAsync(
+  // the spawn itself fails when Rosetta is not installed
+  const result = await execAsync(
     'arch -x86_64 /usr/sbin/sysctl sysctl.proc_translated'
   )
     .then(() => true)
     .catch(() => false)
 
-  if (!isAvailable) {
-    logInfo(
-      '[MacOptimizer] Rosetta 2 is not detected. Attempting automated background installation...',
-      LogPrefix.Backend
-    )
-    try {
-      await execAsync('/usr/sbin/softwareupdate --install-rosetta --agree-to-license')
-      isAvailable = await execAsync(
-        'arch -x86_64 /usr/sbin/sysctl sysctl.proc_translated'
-      )
-        .then(() => true)
-        .catch(() => false)
-
-      if (isAvailable) {
-        logInfo(
-          '[MacOptimizer] Successfully auto-installed Rosetta 2.',
-          LogPrefix.Backend
-        )
-        new Notification({
-          title: 'Rosetta 2 Installed',
-          body: 'Heroic has automatically configured Rosetta 2 for Apple Silicon gaming performance.'
-        }).show()
-        return
-      }
-    } catch (installErr) {
-      logError(
-        ['[MacOptimizer] Automatic Rosetta 2 installation error:', installErr],
-        LogPrefix.Backend
-      )
-    }
-  }
-
   logInfo(
-    `Rosetta is ${isAvailable ? 'available' : 'not available'} on this system.`,
+    `Rosetta is ${result ? 'available' : 'not available'} on this system.`,
     LogPrefix.Backend
   )
 
-  if (!isAvailable) {
-    // Show a dialog saying that Heroic won't run without Rosetta if auto-install failed
+  if (!result) {
+    // show a dialog saying that Heroic wont run without rosetta and add information on how to install it
     await dialog.showMessageBox({
       title: i18next.t('box.warning.rosetta.title', 'Rosetta not found'),
       message: i18next.t(

@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'graceful-fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync
+} from 'graceful-fs'
 
 import {
   AppSettings,
@@ -22,7 +28,7 @@ import {
 } from './utils/compatibility_layers'
 import { backendEvents } from './backend_events'
 import { configStore } from './constants/key_value_stores'
-import { isFlatpak, isIntelMac, isLinux, isMac, isWindows } from './constants/environment'
+import { isFlatpak, isLinux, isMac, isWindows } from './constants/environment'
 import {
   configPath,
   sharedWinePrefix,
@@ -177,18 +183,31 @@ abstract class GlobalConfig {
     const wineskinWine = await getWineskinWine()
     const whiskyWine = await getWhisky()
     const homebrewWine = await getHomebrewWine()
-    const customWineSet = scanCustom ? getCustomWinePaths() : new Set<WineInstallation>()
+    const customWine = scanCustom
+      ? getCustomWinePaths()
+      : new Set<WineInstallation>()
 
-    return new Set([
-      ...getGPTKWine,
-      ...getSystemGPTK,
-      ...crossover,
-      ...wineOnMac,
-      ...wineskinWine,
-      ...whiskyWine,
-      ...homebrewWine,
-      ...customWineSet
-    ])
+    // Homebrew casks and custom paths can point at an already listed build
+    const seenBins = new Set<string>()
+    const isFirstOccurrence = ({ bin }: WineInstallation) => {
+      const resolved = existsSync(bin) ? realpathSync(bin) : bin
+      if (seenBins.has(resolved)) return false
+      seenBins.add(resolved)
+      return true
+    }
+
+    return new Set(
+      [
+        ...getGPTKWine,
+        ...getSystemGPTK,
+        ...crossover,
+        ...wineOnMac,
+        ...wineskinWine,
+        ...whiskyWine,
+        ...homebrewWine,
+        ...customWine
+      ].filter(isFirstOccurrence)
+    )
   }
 
   /**
@@ -380,7 +399,13 @@ class GlobalConfigV0 extends GlobalConfig {
       disableUMU: false,
       verboseLogs: true,
       downloadProtonToSteam: false,
-      advertiseAvxForRosetta: isMac && !isIntelMac,
+      advertiseAvxForRosetta: isMac && defaultWine.type === 'toolkit',
+      enableMetalFX: false,
+      macRayTracing: false,
+      macRetinaMode: false,
+      macUnrealTweaks: false,
+      macGamePatches: isMac,
+      macPerformanceReport: isMac,
       noTrayIcon: false,
       showValveProton: false,
       steamGridDbApiKey: '',

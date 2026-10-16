@@ -59,7 +59,7 @@ import {
   clearAchievementCache,
   getGame
 } from './utils'
-import { getMacHardwareProfile } from './utils/mac_optimizer'
+import { hasModernD3DMetal, rankMacRunners } from './utils/macos'
 import { startPlausible } from './utils/plausible'
 
 import {
@@ -165,45 +165,27 @@ async function initializeWindow(): Promise<BrowserWindow> {
   }
 
   setTimeout(async () => {
-    if (isMac) {
-      void getMacHardwareProfile()
-    }
-
     // Will download Wine/GPTK if none was found
     const availableWine = await GlobalConfig.get().getAlternativeWine()
     let shouldDownloadWine = !availableWine.length
 
     if (isMac && !isIntelMac) {
-      const toolkitDownloaded = availableWine.some(
-        (wine) => wine.type === 'toolkit'
-      )
-
-      if (!toolkitDownloaded) {
+      // Older toolkits (Whisky ships D3DMetal 2) lack DLSS via MetalFX
+      if (!(await hasModernD3DMetal(availableWine))) {
         shouldDownloadWine = true
       }
     }
 
-    // If a valid wine runner is detected but active global setting is empty or invalid, auto-adopt it
-    if (availableWine.length > 0) {
-      const currentGlobalWine = GlobalConfig.get().getSettings().wineVersion
-      const bestWine =
-        isMac && !isIntelMac
-          ? availableWine.find((w) => w.type === 'toolkit') ||
-            availableWine.find((w) => w.type === 'crossover') ||
-            availableWine[0]
-          : availableWine[0]
-
-      if (
-        !currentGlobalWine ||
-        !currentGlobalWine.bin ||
-        currentGlobalWine.name.includes('Not Found')
-      ) {
-        logInfo(
-          `[MacOptimizer] Auto-adopting optimal Wine runner: ${bestWine.name}`,
-          LogPrefix.Backend
-        )
-        GlobalConfig.get().setSetting('wineVersion', bestWine)
-      }
+    // Adopt the most capable runner if the default one is missing
+    const currentGlobalWine = GlobalConfig.get().getSettings().wineVersion
+    if (
+      isMac &&
+      availableWine.length &&
+      !(currentGlobalWine?.bin && existsSync(currentGlobalWine.bin))
+    ) {
+      const [bestWine] = await rankMacRunners(availableWine)
+      logInfo(`Using ${bestWine.name} as the default Wine`, LogPrefix.Backend)
+      GlobalConfig.get().setSetting('wineVersion', bestWine)
     }
 
     void DXVK.getLatest()

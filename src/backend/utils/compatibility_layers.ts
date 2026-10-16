@@ -1,11 +1,17 @@
 import { GlobalConfig } from 'backend/config'
 import { logError, LogPrefix, logInfo } from 'backend/logger'
 import { execAsync, getSteamLibraries } from 'backend/utils'
-import { execSync } from 'child_process'
+import { execFile, execSync } from 'child_process'
 import { GameSettings, WineInstallation } from 'common/types'
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'graceful-fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync
+} from 'graceful-fs'
 import { homedir } from 'os'
-import { dirname, join } from 'path'
+import { basename, dirname, join } from 'path'
 import { PlistObject, parse as plistParse } from 'plist'
 import LaunchCommand from '../storeManagers/legendary/commands/launch'
 import { NonEmptyString } from '../storeManagers/legendary/commands/base'
@@ -18,6 +24,9 @@ import {
   userHome
 } from 'backend/constants/paths'
 import { isLinux, isMac } from 'backend/constants/environment'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 /**
  * Loads the default wine installation path and version.
@@ -48,7 +57,7 @@ export function getDefaultWine(): WineInstallation {
   }
 }
 
-function getCustomWinePaths(): Set<WineInstallation> {
+export function getCustomWinePaths(): Set<WineInstallation> {
   const customPaths = new Set<WineInstallation>()
   // skips this on new installations to avoid infinite loops
   if (existsSync(configPath)) {
@@ -105,9 +114,6 @@ export function getWineLibs(wineBin: string): {
   const potLibPath = join(wineDir, '../lib64')
   if (existsSync(potLibPath)) {
     ret.lib = potLibPath
-  } else if (isMac && existsSync(potLib32Path)) {
-    // macOS Wine distributions store 64-bit and 32on64 libraries in ../lib
-    ret.lib = potLib32Path
   }
   return ret
 }
@@ -239,44 +245,31 @@ export async function getWineOnMac(): Promise<Set<WineInstallation>> {
 
   winePaths.forEach((winePath) => {
     const infoFilePath = join(winePath, 'Contents/Info.plist')
-    let version = ''
-    let name = winePath.split('/').pop() || 'Wine'
-
     if (winePath && existsSync(infoFilePath)) {
+      let info: PlistObject = {}
       try {
-        const info = plistParse(readFileSync(infoFilePath, 'utf-8')) as PlistObject
-        version = (info['CFBundleShortVersionString'] as string) || ''
-        name = (info['CFBundleName'] as string) || name
-      } catch {}
-    }
-
-    let wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
-    if (!existsSync(wineBin)) {
-      wineBin = join(winePath, '/Contents/Resources/wine/bin/wine')
-    }
-    if (!existsSync(wineBin)) {
-      wineBin = join(winePath, 'bin/wine64')
-    }
-    if (!existsSync(wineBin)) {
-      wineBin = join(winePath, 'bin/wine')
-    }
-
-    if (existsSync(wineBin)) {
-      const libPath = existsSync(`${winePath}/Contents/Resources/wine/lib`)
-        ? `${winePath}/Contents/Resources/wine/lib`
-        : existsSync(join(winePath, 'lib'))
-          ? join(winePath, 'lib')
-          : ''
-
-      wineSet.add({
-        ...getWineExecs(wineBin),
-        lib: libPath,
-        lib32: libPath,
-        bin: wineBin,
-        name: version ? `${name} - ${version}` : name,
-        type: 'wine',
-        ...getWineExecs(wineBin)
-      })
+        info = plistParse(readFileSync(infoFilePath, 'utf-8')) as PlistObject
+      } catch {
+        // Binary plists can't be parsed as XML
+      }
+      const version = info['CFBundleShortVersionString'] || ''
+      const name = info['CFBundleName'] || basename(winePath, '.app')
+      let wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
+      if (!existsSync(wineBin)) {
+        // Fallback to wine if wine64 is not found
+        wineBin = join(winePath, '/Contents/Resources/wine/bin/wine')
+      }
+      if (existsSync(wineBin)) {
+        wineSet.add({
+          ...getWineExecs(wineBin),
+          lib: `${winePath}/Contents/Resources/wine/lib`,
+          lib32: `${winePath}/Contents/Resources/wine/lib`,
+          bin: wineBin,
+          name: `${name} - ${version}`,
+          type: 'wine',
+          ...getWineExecs(wineBin)
+        })
+      }
     }
   })
 
@@ -398,40 +391,27 @@ export async function getGamePortingToolkitWine(): Promise<
 
   wineGPTKPaths.forEach((winePath) => {
     const infoFilePath = join(winePath, 'Contents/Info.plist')
-    let name = winePath.split('/').pop() || 'Game Porting Toolkit'
-
     if (existsSync(infoFilePath)) {
+      const wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
       try {
-        const info = plistParse(readFileSync(infoFilePath, 'utf-8')) as PlistObject
-        const version = (info['CFBundleShortVersionString'] as string) || ''
-        if (version) name = `${name} - ${version}`
-      } catch {}
-    }
-
-    let wineBin = join(winePath, '/Contents/Resources/wine/bin/wine64')
-    if (!existsSync(wineBin)) {
-      wineBin = join(winePath, 'bin/wine64')
-    }
-    if (!existsSync(wineBin)) {
-      wineBin = join(winePath, 'bin/wine')
-    }
-
-    if (existsSync(wineBin)) {
-      const libPath = existsSync(`${winePath}/Contents/Resources/wine/lib`)
-        ? `${winePath}/Contents/Resources/wine/lib`
-        : existsSync(join(winePath, 'lib'))
-          ? join(winePath, 'lib')
-          : ''
-
-      gamePortingToolkitWine.add({
-        ...getWineExecs(wineBin),
-        lib: libPath,
-        lib32: libPath,
-        bin: wineBin,
-        name,
-        type: 'toolkit',
-        ...getWineExecs(wineBin)
-      })
+        const name = winePath.split('/').pop() || ''
+        if (existsSync(wineBin)) {
+          gamePortingToolkitWine.add({
+            ...getWineExecs(wineBin),
+            lib: `${winePath}/Contents/Resources/wine/lib`,
+            lib32: `${winePath}/Contents/Resources/wine/lib`,
+            bin: wineBin,
+            name,
+            type: 'toolkit',
+            ...getWineExecs(wineBin)
+          })
+        }
+      } catch (error) {
+        logError(
+          [`Error getting wine version for GPTK ${wineBin};`, error],
+          LogPrefix.GlobalConfig
+        )
+      }
     }
   })
 
@@ -452,11 +432,13 @@ export async function getSystemGamePortingToolkitWine(): Promise<
 
   logInfo('Searching for Gaming Porting Toolkit Wine', LogPrefix.GlobalConfig)
   const { stdout } = await execAsync('mdfind wine64')
-  const wineBin = stdout.split('\n').filter((p) => {
-    return p.match(/^(?!.*heroic\/tools).*game-porting-toolkit.*\/wine64$/)
-  })[0]
+  const wineBin = stdout
+    .split('\n')
+    .find((p) =>
+      p.match(/^(?!.*heroic\/tools).*game-porting-toolkit.*\/wine64$/)
+    )
 
-  if (existsSync(wineBin)) {
+  if (wineBin && existsSync(wineBin)) {
     logInfo(
       `Found Game Porting Toolkit Wine at ${dirname(wineBin)}`,
       LogPrefix.GlobalConfig
@@ -537,51 +519,46 @@ export async function getWhisky(): Promise<Set<WineInstallation>> {
 }
 
 /**
- * Detects Wine installed via Homebrew on Mac (/opt/homebrew or /usr/local)
+ * Detects Wine installed with Homebrew, including casks that link into a
+ * Wine app bundle
  *
  * @returns Promise<Set<WineInstallation>>
  */
 export async function getHomebrewWine(): Promise<Set<WineInstallation>> {
-  const brewWine = new Set<WineInstallation>()
+  const homebrewWine = new Set<WineInstallation>()
   if (!isMac) {
-    return brewWine
+    return homebrewWine
   }
 
-  const brewBins = [
-    '/opt/homebrew/bin/wine64',
-    '/opt/homebrew/bin/wine',
-    '/usr/local/bin/wine64',
-    '/usr/local/bin/wine'
-  ]
-
-  for (const bin of brewBins) {
-    if (existsSync(bin)) {
+  const seen = new Set<string>()
+  for (const prefix of ['/opt/homebrew', '/usr/local']) {
+    for (const name of ['wine64', 'wine']) {
+      const link = join(prefix, 'bin', name)
+      if (!existsSync(link)) continue
+      const wineBin = realpathSync(link)
+      if (seen.has(wineBin)) continue
+      seen.add(wineBin)
       try {
-        const { stdout } = await execAsync(`'${bin}' --version`)
-        const version = stdout.split('\n')[0].trim()
-        const wineDir = dirname(bin)
-        const libPath = existsSync(join(wineDir, '../lib'))
-          ? join(wineDir, '../lib')
-          : ''
-
-        brewWine.add({
-          bin,
-          name: `Homebrew Wine - ${version}`,
+        const { stdout } = await execFileAsync(wineBin, ['--version'])
+        const libDir = join(dirname(wineBin), '../lib')
+        homebrewWine.add({
+          bin: wineBin,
+          name: `Homebrew - ${stdout.split('\n')[0].trim()}`,
           type: 'wine',
-          lib: libPath,
-          lib32: libPath,
-          ...getWineExecs(bin)
+          lib: libDir,
+          lib32: libDir,
+          ...getWineExecs(wineBin)
         })
       } catch (error) {
         logError(
-          [`Error getting version for Homebrew wine ${bin}:`, error],
+          [`Error getting wine version for ${wineBin}:`, error],
           LogPrefix.GlobalConfig
         )
       }
     }
   }
 
-  return brewWine
+  return homebrewWine
 }
 
 export type AllowedWineFlags = Pick<

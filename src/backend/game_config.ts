@@ -239,7 +239,13 @@ class GameConfigV0 extends GameConfig {
       afterLaunchScriptPath,
       gamescope,
       verboseLogs,
-      advertiseAvxForRosetta
+      advertiseAvxForRosetta,
+      enableMetalFX,
+      macRayTracing,
+      macRetinaMode,
+      macUnrealTweaks,
+      macGamePatches,
+      macPerformanceReport
     } = GlobalConfig.get().getSettings()
 
     // initialize generic defaults
@@ -278,6 +284,12 @@ class GameConfigV0 extends GameConfig {
       gamescope,
       verboseLogs,
       advertiseAvxForRosetta,
+      enableMetalFX,
+      macRayTracing,
+      macRetinaMode,
+      macUnrealTweaks,
+      macGamePatches,
+      macPerformanceReport,
       enableQuickSavesMenu: false,
       steamRuntime: false
     } as GameSettings
@@ -300,10 +312,6 @@ class GameConfigV0 extends GameConfig {
       // set specific keys depending on the platform
       if (isMac) {
         defaultSettings.wineCrossoverBottle = wineCrossoverBottle
-        defaultSettings.enableMsync = true
-        defaultSettings.advertiseAvxForRosetta = true
-        defaultSettings.enableEsync = false
-        defaultSettings.enableFsync = false
       }
 
       defaultSettings.winePrefix = winePrefix || sharedWinePrefix

@@ -69,11 +69,12 @@ import gogPresence from './storeManagers/gog/presence'
 import { addRecentGame } from './recent_games/recent_games'
 import { tsStore } from './constants/key_value_stores'
 import {
-  getAntiDriverWarningOverrides,
-  getMacPerformanceEnvVars,
-  tuneWinePrefixForMac,
-  boostGameProcessPriority
-} from './utils/mac_optimizer'
+  captureMetalPerformance,
+  formatPerformanceReport,
+  getMacWineEnv,
+  getPerformanceFilter,
+  prepareMacWineLaunch
+} from './utils/macos'
 import {
   defaultUmuPath,
   sharedWinePrefix,
@@ -103,7 +104,48 @@ import { isEnabled } from './storeManagers/legendary/eos_overlay/eos_overlay'
 import { Game } from 'common/types/game_manager'
 import { getKnownFixesFor } from './known_fixes/utils'
 
-let powerDisplayId: number | null
+let powerDisplayId: number | null = null
+
+/**
+ * Writes the frame statistics macOS recorded while the game ran into its log.
+ * Processing a long session can take a while, so after a timeout the report
+ * goes to the general log instead of holding up the end of the session
+ */
+async function logMacPerformanceReport(
+  title: string,
+  start: Date,
+  filter: ReturnType<typeof getPerformanceFilter>,
+  logWriter: LogWriter
+) {
+  const report = captureMetalPerformance(start, new Date(), filter)
+    .then((result) =>
+      result ? formatPerformanceReport(result).join('\n') : ''
+    )
+    .catch(
+      (error) => `Could not read the Metal performance statistics: ${error}`
+    )
+
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), 30_000)
+  })
+  const text = await Promise.race([report, timeout])
+  clearTimeout(timer)
+
+  if (text === null) {
+    await logWriter.logInfo(
+      'The Metal performance report is still being processed and will be written to the general log'
+    )
+    void report.then(
+      (late) => late && logInfo([`${title}:`, late], LogPrefix.Backend)
+    )
+    return
+  }
+  if (text) {
+    await logWriter.logInfo(text)
+    logInfo([`${title}:`, text], LogPrefix.Backend)
+  }
+}
 
 const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
   appName,
@@ -256,6 +298,14 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
     })
     .finally(async () => {
       await runAfterLaunchScript(gameInfo, gameSettings, logWriter)
+      if (isMac && gameSettings.macPerformanceReport) {
+        await logMacPerformanceReport(
+          title,
+          startPlayingDate,
+          getPerformanceFilter(isNative, gameInfo.install.executable),
+          logWriter
+        )
+      }
       await logWriter.close()
     })
 
@@ -267,6 +317,7 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
   if (powerDisplayId !== null) {
     logInfo('Stopping Display Power Saver Blocker', LogPrefix.Backend)
     powerSaveBlocker.stop(powerDisplayId)
+    powerDisplayId = null
   }
 
   // Update playtime and last played date
@@ -359,6 +410,17 @@ function filterGameSettingsForLog(
       delete gameSettings.gamescope.gameWidth
       delete gameSettings.gamescope.windowType
     }
+  }
+
+  if (!isMac || !notNative) {
+    delete gameSettings.enableMetalFX
+    delete gameSettings.macRayTracing
+    delete gameSettings.macRetinaMode
+    delete gameSettings.macUnrealTweaks
+    delete gameSettings.macGamePatches
+  }
+  if (!isMac) {
+    delete gameSettings.macPerformanceReport
   }
 
   // remove settings that are not used on Linux
@@ -979,21 +1041,27 @@ async function prepareWineLaunch(
     await download('battleye_runtime')
   }
 
-  if (isMac) {
-    try {
-      const targetPrefix =
-        prefixOrBottleFolder || gameSettings.winePrefix || sharedWinePrefix
-      await tuneWinePrefixForMac(targetPrefix, gameSettings, {
-        app_name: gameInfo.app_name,
-        folder_name: gameInfo.folder_name,
-        install_path: gameInfo.install?.install_path
-      })
-    } catch (err) {
-      logError(
-        ['[MacOptimizer] Failed to tune wine prefix:', err],
-        LogPrefix.Backend
-      )
-    }
+  if (isMac && prefixOrBottleFolder) {
+    const { install_path, executable } = gameInfo.install
+    const gameRoots = [
+      install_path,
+      gameInfo.folder_name,
+      executable && dirname(executable)
+    ].filter((path): path is string => !!path && existsSync(path))
+
+    const setupLines = await prepareMacWineLaunch({
+      settings: gameSettings,
+      prefix: prefixOrBottleFolder,
+      gameRoots: [...new Set(gameRoots)],
+      runRegistryCommand: async (commandParts) => {
+        await runWineCommand({
+          commandParts,
+          gameSettings,
+          protonVerb: 'run'
+        })
+      }
+    })
+    await logWriter.logInfo(['Mac setup:', ...setupLines].join('\n  '))
   }
 
   const envVars = setupWineEnvVars(gameSettings, gameInfo.folder_name)
@@ -1156,22 +1224,22 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
       break
   }
 
-  // Configure WINEDLLOVERRIDES and platform optimizations
-  const dllOverridesVar = gameSettings.enviromentOptions.find(
-    ({ key }) => key.toLowerCase() === 'winedlloverrides'
-  )
-  const userOverrideValue = dllOverridesVar ? dllOverridesVar.value : undefined
-
-  if (isMac) {
-    ret.WINEDLLOVERRIDES = getAntiDriverWarningOverrides(userOverrideValue)
-    Object.assign(ret, getMacPerformanceEnvVars(gameSettings))
-  } else if (wineVersion.type === 'wine') {
+  if (wineVersion.type === 'wine' || wineVersion.type === 'toolkit') {
+    // Disable Winemenubuilder to not mess with file associations
     const wmbDisableString = 'winemenubuilder.exe=d'
-    if (userOverrideValue) {
-      ret.WINEDLLOVERRIDES = `${userOverrideValue};${wmbDisableString}`
+    // If the user already set WINEDLLOVERRIDES, append to the end
+    const dllOverridesVar = gameSettings.enviromentOptions.find(
+      ({ key }) => key.toLowerCase() === 'winedlloverrides'
+    )
+    if (dllOverridesVar) {
+      ret[dllOverridesVar.key] = dllOverridesVar.value + ';' + wmbDisableString
     } else {
       ret.WINEDLLOVERRIDES = wmbDisableString
     }
+  }
+
+  if (isMac) {
+    Object.assign(ret, getMacWineEnv(gameSettings))
   }
 
   if (gameSettings.showFps) {
@@ -1199,9 +1267,10 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
     (gameSettings.enableMsync || wineVersion.name.endsWith('-DXMT'))
   ) {
     ret.WINEMSYNC = '1'
-  }
-  if (isMac && ret.WINEMSYNC === '1') {
-    delete ret.WINEESYNC
+    // This is to solve a problem with d3dmetal
+    if (wineVersion.type === 'toolkit') {
+      ret.WINEESYNC = '1'
+    }
   }
   if (isLinux && gameSettings.enableFsync && wineVersion.type !== 'proton') {
     ret.WINEFSYNC = '1'
@@ -1317,13 +1386,9 @@ function setupWineEnvVars(gameSettings: GameSettings, gameId = '0') {
       )
     }
   }
+  // A Rosetta feature (macOS 15+), so it works with every Wine build
   if (gameSettings.advertiseAvxForRosetta && isMac) {
     ret.ROSETTA_ADVERTISE_AVX = '1'
-    ret.ROSETTA_ENABLE_EXPERIMENTAL_AVX = '1'
-  }
-  if (isMac) {
-    ret.MTL_SHADER_VALIDATION = '0'
-    ret.MTL_DEVICE_WRAPPER_TYPE = '0'
   }
   // Workaround for Steam Input virtual gamepad not working for games launched through HGL from Steam
   // using deprecated WineGE/ProtonGE releases (<= 8.x) following SDL behavior change on version >= 2.30
@@ -1526,20 +1591,6 @@ async function runWineCommand({
     }
   }
 
-  if (isMac && winePrefix) {
-    try {
-      await tuneWinePrefixForMac(winePrefix, settings, {
-        install_path: gameInstallPath,
-        folder_name: startFolder || installFolderName
-      })
-    } catch (err) {
-      logError(
-        ['[MacOptimizer] Error tuning wine prefix in runWineCommand:', err],
-        LogPrefix.Backend
-      )
-    }
-  }
-
   if (!(await validWine(wineVersion))) {
     return { stdout: '', stderr: 'Invalid wine' }
   }
@@ -1575,19 +1626,11 @@ async function runWineCommand({
       commandParts.unshift(...wrappers, runnerBin)
     }
 
-    if (isMac && existsSync('/usr/sbin/taskpolicy')) {
-      commandParts.unshift('-a', '-t', '0', '-l', '0', bin)
-      bin = '/usr/sbin/taskpolicy'
-    }
-
     const child = spawn(bin, commandParts, {
       env: env_vars,
       cwd: startFolder
     })
 
-    if (isMac && child.pid) {
-      boostGameProcessPriority(child.pid)
-    }
     child.stdout.setEncoding('utf-8')
     child.stderr.setEncoding('utf-8')
 
@@ -1646,7 +1689,9 @@ async function runWineCommand({
     })
 
     child.on('error', (error) => {
-      console.log(error)
+      logError(['Failed to run Wine command:', error], LogPrefix.Backend)
+      const response = { stderr: `${error}`, stdout: '', code: -1 }
+      res(response)
     })
   })
 }
@@ -1786,10 +1831,6 @@ async function callRunner(
       env: { ...process.env, ...options?.env },
       signal: abortController.signal
     })
-
-    if (isMac && child.pid) {
-      boostGameProcessPriority(child.pid)
-    }
 
     const stdout = memoryLog()
     const stderr = memoryLog()

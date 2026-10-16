@@ -15,6 +15,7 @@ import {
   EnableEsync,
   EnableFSR,
   EnableFsync,
+  EnableMetalFX,
   EnableMsync,
   EnableWineWayland,
   EnableWoW64,
@@ -22,6 +23,11 @@ import {
   GameMode,
   LauncherArgs,
   LaunchOptionSelector,
+  MacGamePatches,
+  MacPerformanceReport,
+  MacRayTracing,
+  MacRetinaMode,
+  MacUnrealTweaks,
   Mangohud,
   OfflineMode,
   PreferedLanguage,
@@ -202,6 +208,11 @@ export default function GamesSettings() {
             <Tools />
           </>
         )}
+        <EnableMetalFX />
+        <MacRayTracing />
+        <MacRetinaMode />
+        <MacUnrealTweaks />
+        <MacGamePatches />
       </TabPanel>
 
       <TabPanel value={value} index={'other'}>
@@ -227,6 +238,7 @@ export default function GamesSettings() {
           </>
         )}
         <VerboseLogs />
+        <MacPerformanceReport />
         <AlternativeExe />
         <LaunchOptionSelector />
         <LauncherArgs />

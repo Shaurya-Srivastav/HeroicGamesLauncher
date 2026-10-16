@@ -1,5 +1,6 @@
 import { ExecResult, GameInfo } from 'common/types'
-import { existsSync, readFileSync, readdirSync } from 'graceful-fs'
+import { execFileSync } from 'child_process'
+import { existsSync, readdirSync } from 'graceful-fs'
 import { dirname, join } from 'path'
 import { libraryStore } from './electronStores'
 import { logWarning } from 'backend/logger'
@@ -8,6 +9,22 @@ import { sendFrontendMessage } from 'backend/ipc'
 import { isMac } from 'backend/constants/environment'
 import { LibraryManager } from 'common/types/game_manager'
 import SideloadGame from './games'
+
+/** Reads CFBundleExecutable, which may be stored as an XML or binary plist */
+function getBundleExecutable(appBundle: string): string | undefined {
+  const plist = join(appBundle, 'Contents', 'Info.plist')
+  if (!existsSync(plist)) return undefined
+  try {
+    const name = execFileSync(
+      '/usr/bin/plutil',
+      ['-extract', 'CFBundleExecutable', 'raw', '-o', '-', plist],
+      { encoding: 'utf-8' }
+    ).trim()
+    return name || undefined
+  } catch {
+    return undefined
+  }
+}
 
 export default class SideloadLibraryManager implements LibraryManager {
   init = () => Promise.resolve()
@@ -49,37 +66,14 @@ export default class SideloadLibraryManager implements LibraryManager {
     }
 
     if (isMac && executable?.endsWith('.app')) {
-      let trueBinary: string | undefined
-      const plistPath = join(executable, 'Contents', 'Info.plist')
-      if (existsSync(plistPath)) {
-        try {
-          const plistContent = readFileSync(plistPath, 'utf-8')
-          const match = plistContent.match(
-            /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/i
-          )
-          if (match && match[1]) {
-            trueBinary = match[1].trim()
-          }
-        } catch {}
-      }
-
-      if (!trueBinary) {
-        const macBinDir = join(executable, 'Contents', 'MacOS')
-        if (existsSync(macBinDir)) {
-          const macBinaries = readdirSync(macBinDir).filter(
-            (f) => !f.startsWith('.') && f !== 'crashpad_handler'
-          )
-          trueBinary = macBinaries[0]
-        }
-      }
-
-      if (trueBinary) {
-        game.install.executable = join(
-          executable,
-          'Contents',
-          'MacOS',
-          trueBinary
+      const macBinDir = join(executable, 'Contents', 'MacOS')
+      const bundleBinary =
+        getBundleExecutable(executable) ??
+        readdirSync(macBinDir).find(
+          (file) => !file.startsWith('.') && file !== 'crashpad_handler'
         )
+      if (bundleBinary) {
+        game.install.executable = join(macBinDir, bundleBinary)
       }
     }
 
