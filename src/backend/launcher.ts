@@ -70,10 +70,12 @@ import { addRecentGame } from './recent_games/recent_games'
 import { tsStore } from './constants/key_value_stores'
 import {
   captureMetalPerformance,
+  finishMacWineSession,
   formatPerformanceReport,
   getMacWineEnv,
   getPerformanceFilter,
-  prepareMacWineLaunch
+  prepareMacWineLaunch,
+  type MacGameFolders
 } from './utils/macos'
 import {
   defaultUmuPath,
@@ -298,6 +300,9 @@ const launchEventCallback: (args: LaunchParams) => StatusPromise = async ({
     })
     .finally(async () => {
       await runAfterLaunchScript(gameInfo, gameSettings, logWriter)
+      if (isMac && !isNative) {
+        await finishMacWineGame(gameInfo, gameSettings, logWriter)
+      }
       if (isMac && gameSettings.macPerformanceReport) {
         await logMacPerformanceReport(
           title,
@@ -417,6 +422,7 @@ function filterGameSettingsForLog(
     delete gameSettings.macRayTracing
     delete gameSettings.macRetinaMode
     delete gameSettings.macUnrealTweaks
+    delete gameSettings.macHighestGraphics
     delete gameSettings.macGamePatches
   }
   if (!isMac) {
@@ -828,6 +834,39 @@ async function getCrossoverBottleFolder(gameSettings: GameSettings) {
     })
 }
 
+function macGameFolders(
+  gameInfo: GameInfo,
+  gameSettings: GameSettings,
+  prefix: string
+): MacGameFolders {
+  const { install_path, executable } = gameInfo.install
+  const gameRoots = [
+    install_path,
+    gameInfo.folder_name,
+    executable && dirname(executable)
+  ].filter((path): path is string => !!path && existsSync(path))
+  return { settings: gameSettings, prefix, gameRoots: [...new Set(gameRoots)] }
+}
+
+/** Applies the Mac settings that need what a Wine game saved, after it exits */
+async function finishMacWineGame(
+  gameInfo: GameInfo,
+  gameSettings: GameSettings,
+  logWriter: LogWriter
+) {
+  const prefix =
+    gameSettings.wineVersion.type === 'crossover'
+      ? await getCrossoverBottleFolder(gameSettings)
+      : gameSettings.winePrefix
+  if (!prefix) return
+  const lines = await finishMacWineSession(
+    macGameFolders(gameInfo, gameSettings, prefix)
+  )
+  if (lines.length) {
+    await logWriter.logInfo(['After the game exited:', ...lines].join('\n  '))
+  }
+}
+
 async function prepareWineLaunch(
   game: Game,
   logWriter: LogWriter
@@ -1042,17 +1081,8 @@ async function prepareWineLaunch(
   }
 
   if (isMac && prefixOrBottleFolder) {
-    const { install_path, executable } = gameInfo.install
-    const gameRoots = [
-      install_path,
-      gameInfo.folder_name,
-      executable && dirname(executable)
-    ].filter((path): path is string => !!path && existsSync(path))
-
     const setupLines = await prepareMacWineLaunch({
-      settings: gameSettings,
-      prefix: prefixOrBottleFolder,
-      gameRoots: [...new Set(gameRoots)],
+      ...macGameFolders(gameInfo, gameSettings, prefixOrBottleFolder),
       runRegistryCommand: async (commandParts) => {
         await runWineCommand({
           commandParts,

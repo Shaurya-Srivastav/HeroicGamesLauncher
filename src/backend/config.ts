@@ -404,6 +404,7 @@ class GlobalConfigV0 extends GlobalConfig {
       macRayTracing: false,
       macRetinaMode: false,
       macUnrealTweaks: false,
+      macHighestGraphics: isMac,
       macGamePatches: isMac,
       macPerformanceReport: isMac,
       noTrayIcon: false,

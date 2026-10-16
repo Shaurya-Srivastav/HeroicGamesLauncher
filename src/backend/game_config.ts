@@ -244,6 +244,7 @@ class GameConfigV0 extends GameConfig {
       macRayTracing,
       macRetinaMode,
       macUnrealTweaks,
+      macHighestGraphics,
       macGamePatches,
       macPerformanceReport
     } = GlobalConfig.get().getSettings()
@@ -288,6 +289,7 @@ class GameConfigV0 extends GameConfig {
       macRayTracing,
       macRetinaMode,
       macUnrealTweaks,
+      macHighestGraphics,
       macGamePatches,
       macPerformanceReport,
       enableQuickSavesMenu: false,

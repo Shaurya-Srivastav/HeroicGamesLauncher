@@ -273,6 +273,7 @@ export interface GameSettings {
   macRayTracing: boolean
   macRetinaMode: boolean
   macUnrealTweaks: boolean
+  macHighestGraphics: boolean
   macGamePatches: boolean
   macPerformanceReport: boolean
 }

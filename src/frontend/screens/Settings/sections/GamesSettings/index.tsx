@@ -24,6 +24,7 @@ import {
   LauncherArgs,
   LaunchOptionSelector,
   MacGamePatches,
+  MacHighestGraphics,
   MacPerformanceReport,
   MacRayTracing,
   MacRetinaMode,
@@ -211,6 +212,7 @@ export default function GamesSettings() {
         <EnableMetalFX />
         <MacRayTracing />
         <MacRetinaMode />
+        <MacHighestGraphics />
         <MacUnrealTweaks />
         <MacGamePatches />
       </TabPanel>

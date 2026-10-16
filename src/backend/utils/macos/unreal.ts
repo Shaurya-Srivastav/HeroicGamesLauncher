@@ -143,7 +143,7 @@ export function applyTweaksToIni(
   return (removed ? dropEmptySections(kept) : kept).join(eol)
 }
 
-function findUserDirectory(
+export function findUserDirectory(
   prefix: string,
   project: string
 ): string | undefined {

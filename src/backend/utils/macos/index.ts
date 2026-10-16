@@ -5,6 +5,7 @@ import type { GameSettings, WineInstallation } from 'common/types'
 import { detectD3DMetal, type D3DMetalRuntime } from './d3dmetal'
 import { describeDisplayLimits, getMacDisplays } from './displays'
 import { syncGamePatches } from './game_patches'
+import { syncGraphicsPreset } from './graphics_presets'
 import {
   enableMetalFXInRunner,
   installMetalFXIntoPrefix,
@@ -103,14 +104,35 @@ function shipsDLSS(gameRoots: string[]): boolean {
   })
 }
 
-export interface MacLaunchPreparation {
+export interface MacGameFolders {
   settings: GameSettings
   /** The Wine prefix or CrossOver bottle folder */
   prefix: string
   /** Folders the game may be installed in, used to recognize known games */
   gameRoots: string[]
+}
+
+export interface MacLaunchPreparation extends MacGameFolders {
   /** Runs `reg` (with the given arguments) inside the prefix */
   runRegistryCommand: (args: string[]) => Promise<void>
+}
+
+/** Whether games can select DLSS, which then runs on MetalFX */
+function canRunDLSS(
+  settings: GameSettings,
+  d3dmetal: D3DMetalRuntime | undefined
+): boolean {
+  if (!settings.enableMetalFX) return false
+  return isDXMT(settings) || (d3dmetal?.major ?? 0) >= 3
+}
+
+async function syncHighestGraphics(
+  { settings, prefix, gameRoots }: MacGameFolders,
+  d3dmetal: D3DMetalRuntime | undefined
+) {
+  return syncGraphicsPreset(prefix, gameRoots, !!settings.macHighestGraphics, {
+    dlss: canRunDLSS(settings, d3dmetal)
+  })
 }
 
 function describeRuntime(
@@ -289,6 +311,13 @@ export async function prepareMacWineLaunch(
       async () => syncGamePatches(gameRoots, settings.macGamePatches !== false)
     ],
     [
+      'Highest graphics settings',
+      async () => {
+        const result = await syncHighestGraphics(preparation, d3dmetal)
+        return 'message' in result ? [result.message] : []
+      }
+    ],
+    [
       'Displays',
       async () =>
         describeDisplayLimits(await getMacDisplays(), !!settings.macRetinaMode)
@@ -303,6 +332,27 @@ export async function prepareMacWineLaunch(
     }
   }
   return lines
+}
+
+/**
+ * Applies the Mac-specific settings that need what the game saved while it
+ * ran, after it exits
+ *
+ * @returns Lines describing what changed, meant for the game log
+ */
+export async function finishMacWineSession(
+  folders: MacGameFolders
+): Promise<string[]> {
+  const { settings } = folders
+  try {
+    const d3dmetal = isDXMT(settings)
+      ? undefined
+      : await detectD3DMetal(settings.wineVersion).catch(() => undefined)
+    const result = await syncHighestGraphics(folders, d3dmetal)
+    return result.status === 'raised' ? [result.message] : []
+  } catch (error) {
+    return [`Highest graphics settings failed: ${String(error)}`]
+  }
 }
 
 // CrossOver comes after GPTK because it stops working when its trial expires
