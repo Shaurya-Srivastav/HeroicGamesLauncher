@@ -16,6 +16,8 @@ import { findUserDirectory } from './unreal'
 export interface GraphicsUpgradeOptions {
   /** DLSS runs on MetalFX, so it can be selected as the game's upscaler */
   dlss: boolean
+  /** DLSS Frame Generation runs as MetalFX frame interpolation */
+  frameGeneration: boolean
 }
 
 export interface GraphicsPresetProfile {
@@ -31,13 +33,22 @@ export interface GraphicsPresetProfile {
   /** The save and boolean property recording that the game finished its first launch */
   firstLaunch: { saveName: string; property: string }
   /**
-   * Raises the settings in the save's properties to the highest the game offers
+   * The `IntPoint` property of the `firstLaunch` save holding the resolution
+   * the game renders at in borderless fullscreen. Under Wine the game picks one
+   * smaller than its window on its first launch, and upscales from a fraction
+   * of the window's resolution
+   */
+  targetResolution?: string
+  /**
+   * Raises the settings in the save's properties to the highest the game
+   * offers, with an upscaler mode the game stays smooth at in its window
    *
    * @returns A description of every change, empty if nothing changed
    */
   upgrade: (
     properties: GvasProperty[],
-    options: GraphicsUpgradeOptions
+    options: GraphicsUpgradeOptions,
+    windowSize?: Resolution
   ) => string[]
 }
 
@@ -120,9 +131,39 @@ const HELLBLADE2_AFTER_DYNAMIC_RESOLUTION = [
 const HELLBLADE2_AFTER_PRESET = HELLBLADE2_AFTER_DYNAMIC_RESOLUTION.slice(4)
 const HELLBLADE2_AFTER_UPSCALER = HELLBLADE2_AFTER_PRESET.slice(1)
 
+/**
+ * The game's DLSS modes from sharpest to fastest, with how many times smaller
+ * than the window's width and height they render
+ */
+const HELLBLADE2_DLSS_MODES = [
+  { id: 'Quality', label: 'Quality', divisor: 1.5 },
+  { id: 'Balanced', label: 'Balanced', divisor: 1.72 },
+  { id: 'Performance', label: 'Performance', divisor: 2 },
+  { id: 'UltraPerformance', label: 'Ultra Performance', divisor: 3 }
+]
+
+/**
+ * The most pixels DLSS upscales from, as many as 720p has. With every setting
+ * at High, an M4 Max (32-core GPU) renders about 18 frames per second just
+ * below it (Ultra Performance at 5120x1440), and about 15 at twice as many
+ */
+const HELLBLADE2_DLSS_MAX_PIXELS = 1280 * 720
+
+/** The sharpest DLSS mode within {@link HELLBLADE2_DLSS_MAX_PIXELS}, Quality without a window size */
+function hellblade2DlssMode(windowSize?: Resolution) {
+  if (!windowSize) return HELLBLADE2_DLSS_MODES[0]
+  const pixels = windowSize.width * windowSize.height
+  return (
+    HELLBLADE2_DLSS_MODES.find(
+      ({ divisor }) => pixels / divisor ** 2 <= HELLBLADE2_DLSS_MAX_PIXELS
+    ) ?? HELLBLADE2_DLSS_MODES[HELLBLADE2_DLSS_MODES.length - 1]
+  )
+}
+
 function upgradeHellblade2(
   properties: GvasProperty[],
-  { dlss }: GraphicsUpgradeOptions
+  { dlss, frameGeneration }: GraphicsUpgradeOptions,
+  windowSize?: Resolution
 ): string[] {
   const changes: string[] = []
 
@@ -178,9 +219,24 @@ function upgradeHellblade2(
       'DLSS',
       HELLBLADE2_AFTER_UPSCALER
     )
-    const mode = setName(dlssSettings, 'QualityModeId', 'Quality')
-    if (upscaler.changed || mode.changed) {
-      changes.push('upscaler: DLSS (on MetalFX) in Quality mode')
+    const mode = hellblade2DlssMode(windowSize)
+    const modeChanged = setName(dlssSettings, 'QualityModeId', mode.id).changed
+    const frameGenerationChanged =
+      frameGeneration &&
+      setName(dlssSettings, 'FrameGenerationId', 'On', [
+        'IsAutoSharpness',
+        'Sharpness'
+      ]).changed
+    if (upscaler.changed || modeChanged || frameGenerationChanged) {
+      const window = windowSize
+        ? ` for the ${windowSize.width}x${windowSize.height} window`
+        : ''
+      const generated = frameGeneration
+        ? ', with DLSS Frame Generation (MetalFX frame interpolation)'
+        : ''
+      changes.push(
+        `upscaler: DLSS (on MetalFX) in ${mode.label} mode${window}${generated}`
+      )
     }
   }
   return changes
@@ -195,6 +251,7 @@ export const GRAPHICS_PRESET_PROFILES: GraphicsPresetProfile[] = [
     saveName: 'GraphicsSettings',
     saveClass: '/Script/NTUI.NTVMGraphicsSettingsSaveModel',
     firstLaunch: { saveName: 'SystemSettings', property: 'bFirstLaunch' },
+    targetResolution: 'TargetRes',
     upgrade: upgradeHellblade2
   }
 ]
@@ -215,7 +272,8 @@ export function findGraphicsPresetProfile(
 export function upgradeGraphicsSave(
   data: Buffer,
   profile: GraphicsPresetProfile,
-  options: GraphicsUpgradeOptions
+  options: GraphicsUpgradeOptions,
+  windowSize?: Resolution
 ): { data: Buffer; changes: string[] } | undefined {
   const save = parseGvas(data)
   if (save.saveClass !== profile.saveClass) {
@@ -223,9 +281,45 @@ export function upgradeGraphicsSave(
       `The ${profile.saveName} save holds a ${save.saveClass}, not ${profile.saveClass}`
     )
   }
-  const changes = profile.upgrade(save.properties, options)
+  const changes = profile.upgrade(save.properties, options, windowSize)
   if (!changes.length) return
   return { data: serializeGvas(save), changes }
+}
+
+export interface Resolution {
+  width: number
+  height: number
+}
+
+/**
+ * Sets the `IntPoint` property `property` of a save to `resolution`
+ *
+ * @returns The new file contents and the change, or nothing if no change was needed
+ */
+export function setTargetResolution(
+  data: Buffer,
+  property: string,
+  { width, height }: Resolution
+): { data: Buffer; change: string } | undefined {
+  const save = parseGvas(data)
+  const target = findProperty(save.properties, property)
+  if (
+    target?.tag.structName !== 'IntPoint' ||
+    target.value.kind !== 'raw' ||
+    target.value.data.length !== 8
+  ) {
+    return
+  }
+  const previous = `${target.value.data.readInt32LE(0)}x${target.value.data.readInt32LE(4)}`
+  if (previous === `${width}x${height}`) return
+  const point = Buffer.alloc(8)
+  point.writeInt32LE(width, 0)
+  point.writeInt32LE(height, 4)
+  target.value = { kind: 'raw', data: point }
+  return {
+    data: serializeGvas(save),
+    change: `resolution: ${width}x${height}, the size of the game's window (the game picked ${previous}, and upscaled its image from a fraction of the window's resolution)`
+  }
 }
 
 /** Records, per profile, that Heroic raised the settings the game picked on its first launch */
@@ -261,6 +355,40 @@ function findSave(saved: string, name: string): string | undefined {
   ).find((path) => existsSync(path))
 }
 
+/** The size of the game's window, which Unreal saves in `GameUserSettings.ini` */
+async function readWindowSize(saved: string): Promise<Resolution | undefined> {
+  for (const platform of SAVE_PLATFORMS) {
+    const ini = await readFile(
+      join(saved, 'Config', platform, 'GameUserSettings.ini'),
+      'utf-8'
+    ).catch(() => '')
+    const read = (key: string) =>
+      Number(new RegExp(`^${key}=(\\d+)\\s*$`, 'm').exec(ini)?.[1])
+    const width = read('ResolutionSizeX')
+    const height = read('ResolutionSizeY')
+    if (width > 0 && height > 0) return { width, height }
+  }
+  return
+}
+
+/** Sets the profile's target resolution to the size of the game's window */
+async function matchTargetResolution(
+  saved: string,
+  profile: GraphicsPresetProfile,
+  windowSize: Resolution
+): Promise<string | undefined> {
+  const savePath = findSave(saved, profile.firstLaunch.saveName)
+  if (!profile.targetResolution || !savePath) return
+  const result = setTargetResolution(
+    await readFile(savePath),
+    profile.targetResolution,
+    windowSize
+  )
+  if (!result) return
+  await writeFile(savePath, result.data)
+  return result.change
+}
+
 /**
  * Whether the game finished its first launch. Until then it replaces the
  * graphics settings with the ones it picks from a hardware benchmark
@@ -286,7 +414,9 @@ export type GraphicsPresetResult =
 
 /**
  * Raises the graphics settings of a supported game to the highest it offers,
- * once after the game picked its own settings on its first launch. Changes
+ * with an upscaler mode it stays smooth at in its window, and its target
+ * resolution to the size of that window, once after the game picked its own
+ * settings on its first launch. Changes
  * the player makes in the game afterwards are kept. Meant to run both before
  * the game starts and after it exits, since the game only writes its settings
  * during its first launch
@@ -325,13 +455,25 @@ export async function syncGraphicsPreset(
   }
   if (manifest[profile.id]) return { status: 'unchanged' }
 
-  const result = upgradeGraphicsSave(await readFile(savePath), profile, options)
+  const windowSize = await readWindowSize(saved)
+  const result = upgradeGraphicsSave(
+    await readFile(savePath),
+    profile,
+    options,
+    windowSize
+  )
   if (result) await writeFile(savePath, result.data)
+  const resolution =
+    windowSize && (await matchTargetResolution(saved, profile, windowSize))
   manifest[profile.id] = { raised: new Date().toISOString() }
   await writeManifest(prefix, manifest)
-  if (!result) return { status: 'unchanged' }
+  const changes = [
+    ...(result?.changes ?? []),
+    ...(resolution ? [resolution] : [])
+  ]
+  if (!changes.length) return { status: 'unchanged' }
   return {
     status: 'raised',
-    message: `Raised ${profile.title}'s graphics settings in ${savePath}: ${result.changes.join('; ')}. Changes made in the game from now on are kept`
+    message: `Raised ${profile.title}'s graphics settings in ${join(saved, 'SaveGames')}: ${changes.join('; ')}. Changes made in the game from now on are kept`
   }
 }

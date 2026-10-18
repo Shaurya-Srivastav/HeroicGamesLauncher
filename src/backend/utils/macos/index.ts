@@ -4,6 +4,7 @@ import { basename, join } from 'path'
 import type { GameSettings, WineInstallation } from 'common/types'
 import {
   enableFrameGenerationInRunner,
+  runnerOffersFrameGeneration,
   type FrameGenerationRunnerState
 } from './d3dkmt'
 import { detectD3DMetal, type D3DMetalRuntime } from './d3dmetal'
@@ -130,12 +131,31 @@ function canRunDLSS(
   return isDXMT(settings) || (d3dmetal?.major ?? 0) >= 3
 }
 
+/** Whether games can turn on DLSS Frame Generation, which then runs as MetalFX frame interpolation */
+async function canRunFrameGeneration(
+  settings: GameSettings,
+  d3dmetal: D3DMetalRuntime | undefined
+): Promise<boolean> {
+  if (
+    isDXMT(settings) ||
+    !canRunDLSS(settings, d3dmetal) ||
+    macOSMajorVersion() < METALFX_FRAME_INTERPOLATION_MACOS
+  ) {
+    return false
+  }
+  if (settings.wineVersion.type === 'crossover' || !d3dmetal?.windowsDllDir) {
+    return true
+  }
+  return runnerOffersFrameGeneration(d3dmetal.windowsDllDir).catch(() => false)
+}
+
 async function syncHighestGraphics(
   { settings, prefix, gameRoots }: MacGameFolders,
   d3dmetal: D3DMetalRuntime | undefined
 ) {
   return syncGraphicsPreset(prefix, gameRoots, !!settings.macHighestGraphics, {
-    dlss: canRunDLSS(settings, d3dmetal)
+    dlss: canRunDLSS(settings, d3dmetal),
+    frameGeneration: await canRunFrameGeneration(settings, d3dmetal)
   })
 }
 

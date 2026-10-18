@@ -146,8 +146,11 @@ export function hellblade2LowGraphics({ dlss = true } = {}): Buffer {
   ])
 }
 
-export function hellblade2SystemSettings(firstLaunchDone: boolean): Buffer {
-  const target = Buffer.concat([int32(1920), int32(1080)])
+export function hellblade2SystemSettings(
+  firstLaunchDone: boolean,
+  [width, height] = [1920, 1080]
+): Buffer {
+  const target = Buffer.concat([int32(width), int32(height)])
   return save(SYSTEM_CLASS, [
     ...(firstLaunchDone ? [boolProp('bFirstLaunch', false)] : []),
     nativeStructProp('TargetRes', 'IntPoint', target)

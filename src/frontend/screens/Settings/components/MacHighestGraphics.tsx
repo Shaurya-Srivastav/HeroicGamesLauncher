@@ -35,7 +35,7 @@ const MacHighestGraphics = () => {
       <InfoIcon
         text={t(
           'help.macHighestGraphics',
-          "Supported games (currently Senua's Saga: Hellblade II) benchmark the GPU on their first launch and pick low settings under D3DMetal. Heroic raises every graphics setting to the highest the game offers once, turns off dynamic resolution and, with DLSS via MetalFX on, selects DLSS Quality. Changes you make in the game afterwards are kept."
+          "Supported games (currently Senua's Saga: Hellblade II) benchmark the GPU on their first launch and pick low settings under D3DMetal. Heroic raises every graphics setting to the highest the game offers once, renders at the size of the game's window and turns off dynamic resolution. With DLSS via MetalFX on, it selects the sharpest DLSS mode that upscales from at most as many pixels as 720p (Ultra Performance on a 5120x1440 display) and turns on DLSS Frame Generation where the runner supports it. Changes you make in the game afterwards are kept."
         )}
       />
     </div>
