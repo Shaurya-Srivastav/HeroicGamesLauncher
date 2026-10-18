@@ -2,6 +2,10 @@ import { existsSync, readdirSync } from 'graceful-fs'
 import { cpus } from 'os'
 import { basename, join } from 'path'
 import type { GameSettings, WineInstallation } from 'common/types'
+import {
+  enableFrameGenerationInRunner,
+  type FrameGenerationRunnerState
+} from './d3dkmt'
 import { detectD3DMetal, type D3DMetalRuntime } from './d3dmetal'
 import { describeDisplayLimits, getMacDisplays } from './displays'
 import { syncGamePatches } from './game_patches'
@@ -223,10 +227,30 @@ async function syncMetalFX(
   lines.push(
     `DLSS via MetalFX: on (D3DMetal ${d3dmetal.version}). Select DLSS in the game's graphics options`
   )
+  if (macOSMajorVersion() < METALFX_FRAME_INTERPOLATION_MACOS) {
+    lines.push(
+      `DLSS Frame Generation needs macOS ${METALFX_FRAME_INTERPOLATION_MACOS} or newer, only DLSS upscaling is available`
+    )
+    return lines
+  }
+  const frameGeneration =
+    wine.type === 'crossover' || !d3dmetal.windowsDllDir
+      ? 'native'
+      : await enableFrameGenerationInRunner(d3dmetal.windowsDllDir).catch(
+          (error): FrameGenerationRunnerState => {
+            lines.push(`Couldn't patch ${wine.name}'s gdi32.dll: ${error}`)
+            return 'unsupported'
+          }
+        )
+  if (frameGeneration === 'patched') {
+    lines.push(
+      `Patched ${wine.name}'s gdi32.dll to report hardware-accelerated GPU scheduling, which games require before offering DLSS Frame Generation (original kept as gdi32.dll.heroic-stock)`
+    )
+  }
   lines.push(
-    macOSMajorVersion() >= METALFX_FRAME_INTERPOLATION_MACOS
-      ? 'DLSS Frame Generation, if the game offers it, runs as MetalFX frame interpolation'
-      : `DLSS Frame Generation needs macOS ${METALFX_FRAME_INTERPOLATION_MACOS} or newer, only DLSS upscaling is available`
+    frameGeneration === 'unsupported'
+      ? `DLSS Frame Generation stays unavailable: ${wine.name}'s gdi32.dll can't report hardware-accelerated GPU scheduling, which games require for it`
+      : 'DLSS Frame Generation, if the game offers it, runs as MetalFX frame interpolation'
   )
   return lines
 }
