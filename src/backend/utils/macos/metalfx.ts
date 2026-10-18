@@ -1,6 +1,15 @@
 import { createHash } from 'crypto'
 import { existsSync, realpathSync } from 'graceful-fs'
-import { copyFile, readFile, rename, rm, writeFile } from 'fs/promises'
+import {
+  copyFile,
+  lstat,
+  readFile,
+  readlink,
+  rename,
+  rm,
+  symlink,
+  writeFile
+} from 'fs/promises'
 import { join } from 'path'
 
 const STOCK_SUFFIX = '.heroic-stock'
@@ -40,16 +49,23 @@ async function swapIn(source: string, target: string): Promise<boolean> {
   if (existsSync(target) && !existsSync(target + STOCK_SUFFIX)) {
     await rename(target, target + STOCK_SUFFIX)
   }
-  await copyFile(source, target)
+  // A copy of a symlinked unix library would load D3DMetal's shared library
+  // a second time, with its own state
+  if ((await lstat(source)).isSymbolicLink()) {
+    await rm(target, { force: true })
+    await symlink(await readlink(source), target)
+  } else {
+    await copyFile(source, target)
+  }
   return true
 }
 
 /**
  * GPTK 3 ships two NGX implementations: the default `nvngx` reports DLSS as
- * unsupported, `nvngx-on-metalfx` implements it with MetalFX. Apple's
- * instructions are to replace the former with the latter; the original stays
- * next to it as `*.heroic-stock`. D3DMetal only exposes DLSS when
- * `D3DM_ENABLE_METALFX=1`, so games launched without it are unaffected.
+ * unsupported, `nvngx-on-metalfx` implements it with MetalFX. GPTK 4 only
+ * ships the latter. Apple's instructions are to rename it to `nvngx`; an
+ * original stays next to it as `*.heroic-stock`. D3DMetal only exposes DLSS
+ * when `D3DM_ENABLE_METALFX=1`, so games launched without it are unaffected.
  *
  * @param windowsDllDir The runner's `lib/wine/x86_64-windows` folder
  * @returns false if this runner has no MetalFX-backed NGX
@@ -63,7 +79,7 @@ export async function enableMetalFXInRunner(
   )
   if (!dllReady) return false
 
-  // In Gcenx's builds both .so files are symlinks to libd3dshared.dylib, making this a no-op
+  // Both .so files are symlinks to libd3dshared.dylib, so with GPTK 3 this is a no-op
   const unixDir = join(windowsDllDir, '..', 'x86_64-unix')
   await swapIn(join(unixDir, 'nvngx-on-metalfx.so'), join(unixDir, 'nvngx.so'))
   return true

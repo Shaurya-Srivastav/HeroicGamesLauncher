@@ -73,7 +73,9 @@ export function parseMajorVersion(version: string): number {
   return Number.isNaN(major) ? 0 : major
 }
 
-async function readBundleVersion(frameworkPath: string): Promise<string> {
+export async function readBundleVersion(
+  frameworkPath: string
+): Promise<string> {
   const plists = [
     join(frameworkPath, 'Resources', 'Info.plist'),
     join(frameworkPath, 'Versions', 'A', 'Resources', 'Info.plist'),
